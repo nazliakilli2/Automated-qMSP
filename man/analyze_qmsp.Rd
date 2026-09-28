@@ -10,10 +10,13 @@ analyze_qmsp(
   ntc = "NTC|dH2O|dH20|water|blank|^NK",
   positive = "H460|A549|HT29|positive|^PC\\\\b",
   ct_cutoff = 40,
+  beta_cutoff = 0,
   ref_ct_max = 40,
   ref_ct_warn = 35,
   min_cq_conf = 0.5,
-  min_plateau = 0.2
+  min_plateau = 0.2,
+  min_methylated_genes = 1,
+  panel = NULL
 )
 }
 \arguments{
@@ -28,7 +31,12 @@ calls are then made from the gene Ct alone.}
 \item{positive}{Regular expression matching positive control sample names
 (e.g. fully methylated / bisulfite-converted cell line DNA).}
 
-\item{ct_cutoff}{Genes with Ct above this are called unmethylated.}
+\item{ct_cutoff}{Genes with Ct above this are called unmethylated. A single
+number, or a named vector with per-gene values plus one unnamed default.}
+
+\item{beta_cutoff}{Genes with a beta value below this are called
+unmethylated (0 = any detected methylation counts). Single number or
+named per-gene vector like `ct_cutoff`.}
 
 \item{ref_ct_max}{Samples whose reference Ct is above this (or undetermined)
 are invalid.}
@@ -40,11 +48,17 @@ are sent to review.}
 
 \item{min_plateau}{Amplified wells whose final delta Rn is below this
 fraction of the positive controls' (same gene and run) are sent to review.}
+
+\item{min_methylated_genes}{Number of methylated panel genes needed for a
+`Potentially cancer` verdict.}
+
+\item{panel}{Genes that count for the verdict (default: all genes except the
+reference).}
 }
 \value{
-A `qmsp_result` list with `results` (one row per run, sample and
-  gene), `controls` (NTC / positive control status per run and gene),
-  `wells` (every well with its role, flags and result), `curves`,
+A `qmsp_result` list with `report` (one verdict per run and
+  sample), `results` (one row per run, sample and gene), `controls` (NTC /
+  positive control status per run and gene), `wells` (every well with its role, flags and result), `curves`,
   `thresholds` and `settings`.
 }
 \description{
@@ -70,5 +84,19 @@ Methylation values:
     reference)
   \item `pmr` = percentage of methylated reference: 100 x ratio(sample) /
     mean ratio(positive controls) for the same gene in the same run.
+  \item `beta` = methylation level between 0 (unmethylated) and 1 (as
+    methylated as the fully methylated positive control): PMR / 100, capped
+    at 1. In runs without a reference gene it is 2^-(Ct(sample) -
+    Ct(positive control)), capped at 1.
 }
+
+A gene is called `Methylated` when its Ct is at or below `ct_cutoff`, its
+wells pass QC, and its beta is at or above `beta_cutoff`. Both cutoffs can be
+set per gene: `ct_cutoff = c(40, TAC1 = 38)` uses 38 for TAC1 and 40 for all
+other genes.
+
+Finally every sample gets a verdict (see [risk_report()]):
+`Potentially cancer` when at least `min_methylated_genes` of the panel genes
+are methylated, `Inconclusive` when that could not be decided because genes
+need review or the sample failed, otherwise `Not risky`.
 }

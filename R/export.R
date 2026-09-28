@@ -1,6 +1,7 @@
 #' Export results to Excel (or CSV files)
 #'
-#' Writes one sheet per table: a wide summary of calls, the full per-gene
+#' Writes one sheet per table: the verdict per sample, wide tables of calls,
+#' beta values and PMR, the full per-gene
 #' results, the control checks, every well, and the settings used. If the
 #' `writexl` package is not installed, CSV files are written instead.
 #'
@@ -13,16 +14,21 @@ export_results <- function(x, path = "qmsp_results.xlsx") {
     stop("`x` must come from analyze_qmsp().", call. = FALSE)
   }
   wells <- x$wells
+  report <- x$report
+  report$verdict <- as.character(report$verdict)
   sheets <- list(
-    Summary = results_wide(x, "call"),
+    Report = report,
+    Calls = results_wide(x, "call"),
+    Beta = results_wide(x, "beta"),
     PMR = results_wide(x, "pmr"),
     Results = within_results(x$results),
     Controls = x$controls,
     Wells = wells[, setdiff(names(wells), c("row", "col"))],
     Settings = data.frame(
       setting = names(x$settings),
-      value = vapply(x$settings, function(v) paste(format(v), collapse = ", "),
-                     character(1)),
+      value = vapply(x$settings, function(v) {
+        if (is.null(v)) "" else fmt_setting(v)
+      }, character(1)),
       stringsAsFactors = FALSE
     )
   )

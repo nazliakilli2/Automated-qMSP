@@ -6,14 +6,14 @@
 \usage{
 plot_methylation(
   x,
-  value = c("call", "pmr", "ratio", "delta_ct", "ct"),
+  value = c("call", "beta", "pmr", "ratio", "delta_ct", "ct"),
   controls = FALSE
 )
 }
 \arguments{
 \item{x}{A `qmsp_result` from [analyze_qmsp()].}
 
-\item{value}{`"call"` (categorical) or `"pmr"`, `"ratio"`, `"delta_ct"`,
+\item{value}{`"call"` (categorical) or `"beta"`, `"pmr"`, `"ratio"`, `"delta_ct"`,
 `"ct"` (numeric).}
 
 \item{controls}{Include control samples?}

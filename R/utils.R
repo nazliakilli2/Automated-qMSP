@@ -32,3 +32,18 @@ join_flags <- function(...) {
   out <- gsub("^; |; $", "", out)
   out
 }
+
+# Look up a per-gene setting. `value` is one number, or a named vector with
+# per-gene values plus one unnamed default: c(40, TAC1 = 38).
+gene_value <- function(value, genes) {
+  nm <- names(value)
+  if (is.null(nm)) return(rep(unname(value[[1]]), length(genes)))
+  default <- value[!nzchar(nm)]
+  if (!length(default)) {
+    stop("Per-gene settings need one unnamed default value, e.g. ",
+         "c(40, TAC1 = 38).", call. = FALSE)
+  }
+  out <- unname(value[genes])
+  out[is.na(out)] <- default[[1]]
+  out
+}

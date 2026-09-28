@@ -21,7 +21,21 @@
 #'     reference)
 #'   \item `pmr` = percentage of methylated reference: 100 x ratio(sample) /
 #'     mean ratio(positive controls) for the same gene in the same run.
+#'   \item `beta` = methylation level between 0 (unmethylated) and 1 (as
+#'     methylated as the fully methylated positive control): PMR / 100, capped
+#'     at 1. In runs without a reference gene it is 2^-(Ct(sample) -
+#'     Ct(positive control)), capped at 1.
 #' }
+#'
+#' A gene is called `Methylated` when its Ct is at or below `ct_cutoff`, its
+#' wells pass QC, and its beta is at or above `beta_cutoff`. Both cutoffs can be
+#' set per gene: `ct_cutoff = c(40, TAC1 = 38)` uses 38 for TAC1 and 40 for all
+#' other genes.
+#'
+#' Finally every sample gets a verdict (see [risk_report()]):
+#' `Potentially cancer` when at least `min_methylated_genes` of the panel genes
+#' are methylated, `Inconclusive` when that could not be decided because genes
+#' need review or the sample failed, otherwise `Not risky`.
 #'
 #' @param x A `qmsp_run` from [read_eds()] / [read_eds_files()].
 #' @param reference Regular expression matching the reference gene name
@@ -30,7 +44,11 @@
 #' @param ntc Regular expression matching no-template control sample names.
 #' @param positive Regular expression matching positive control sample names
 #'   (e.g. fully methylated / bisulfite-converted cell line DNA).
-#' @param ct_cutoff Genes with Ct above this are called unmethylated.
+#' @param ct_cutoff Genes with Ct above this are called unmethylated. A single
+#'   number, or a named vector with per-gene values plus one unnamed default.
+#' @param beta_cutoff Genes with a beta value below this are called
+#'   unmethylated (0 = any detected methylation counts). Single number or
+#'   named per-gene vector like `ct_cutoff`.
 #' @param ref_ct_max Samples whose reference Ct is above this (or undetermined)
 #'   are invalid.
 #' @param ref_ct_warn Reference Ct above this is flagged as low DNA input.
@@ -38,10 +56,14 @@
 #'   are sent to review.
 #' @param min_plateau Amplified wells whose final delta Rn is below this
 #'   fraction of the positive controls' (same gene and run) are sent to review.
+#' @param min_methylated_genes Number of methylated panel genes needed for a
+#'   `Potentially cancer` verdict.
+#' @param panel Genes that count for the verdict (default: all genes except the
+#'   reference).
 #'
-#' @return A `qmsp_result` list with `results` (one row per run, sample and
-#'   gene), `controls` (NTC / positive control status per run and gene),
-#'   `wells` (every well with its role, flags and result), `curves`,
+#' @return A `qmsp_result` list with `report` (one verdict per run and
+#'   sample), `results` (one row per run, sample and gene), `controls` (NTC /
+#'   positive control status per run and gene), `wells` (every well with its role, flags and result), `curves`,
 #'   `thresholds` and `settings`.
 #' @export
 analyze_qmsp <- function(x,
@@ -49,17 +71,21 @@ analyze_qmsp <- function(x,
                          ntc = "NTC|dH2O|dH20|water|blank|^NK",
                          positive = "H460|A549|HT29|positive|^PC\\b",
                          ct_cutoff = 40,
+                         beta_cutoff = 0,
                          ref_ct_max = 40,
                          ref_ct_warn = 35,
                          min_cq_conf = 0.5,
-                         min_plateau = 0.2) {
+                         min_plateau = 0.2,
+                         min_methylated_genes = 1,
+                         panel = NULL) {
   if (!inherits(x, "qmsp_run")) {
     stop("`x` must come from read_eds() or read_eds_files().", call. = FALSE)
   }
   settings <- list(reference = reference, ntc = ntc, positive = positive,
-                   ct_cutoff = ct_cutoff, ref_ct_max = ref_ct_max,
-                   ref_ct_warn = ref_ct_warn, min_cq_conf = min_cq_conf,
-                   min_plateau = min_plateau)
+                   ct_cutoff = ct_cutoff, beta_cutoff = beta_cutoff,
+                   ref_ct_max = ref_ct_max, ref_ct_warn = ref_ct_warn,
+                   min_cq_conf = min_cq_conf, min_plateau = min_plateau,
+                   min_methylated_genes = min_methylated_genes, panel = panel)
 
   wells <- classify_wells(x$wells, x$curves, settings)
   controls <- control_status(wells)
@@ -69,12 +95,15 @@ analyze_qmsp <- function(x,
   thresholds <- thresholds[!grepl("DEFAULT_SETTINGS", thresholds$target), ,
                            drop = FALSE]
 
-  structure(
-    list(results = results, controls = controls, wells = wells,
+  out <- structure(
+    list(report = NULL, results = results, controls = controls, wells = wells,
          curves = x$curves, thresholds = thresholds, meta = x$meta,
          settings = settings),
     class = "qmsp_result"
   )
+  out$report <- risk_report(out, min_methylated_genes = min_methylated_genes,
+                            panel = panel)
+  out
 }
 
 #' @export
@@ -85,6 +114,9 @@ print.qmsp_result <- function(x, ...) {
       length(unique(r$target)), " genes\n", sep = "")
   tab <- table(factor(r$call, levels = call_levels()))
   cat("  calls: ", paste(names(tab), tab, sep = " = ", collapse = ", "), "\n",
+      sep = "")
+  v <- table(x$report$verdict)
+  cat("  verdicts: ", paste(names(v), v, sep = " = ", collapse = ", "), "\n",
       sep = "")
   bad <- x$controls[x$controls$ntc_status %in% c("Fail", "Review") |
                       x$controls$positive_status %in% c("Fail"), ]
@@ -121,7 +153,7 @@ classify_wells <- function(wells, curves, s) {
   wells$plateau_ratio <- plateau_ratio(wells, s$min_cq_conf)
 
   amplified <- !is.na(wells$ct)
-  cutoff <- ifelse(is_ref, s$ref_ct_max, s$ct_cutoff)
+  cutoff <- ifelse(is_ref, s$ref_ct_max, gene_value(s$ct_cutoff, wells$target))
   within <- amplified & wells$ct <= cutoff
 
   f_conf <- within & !is.na(wells$cq_conf) & wells$cq_conf < s$min_cq_conf
@@ -268,6 +300,20 @@ sample_results <- function(wells, controls, s) {
   pc_ratio <- tapply(res$ratio[pc], paste(res$run, res$target)[pc], mean)
   res$pmr <- 100 * res$ratio / unname(pc_ratio[paste(res$run, res$target)])
 
+  # Beta: methylation level 0-1 relative to the fully methylated control.
+  no_ref <- res$ref_status %in% c("Not run", "n/a")
+  beta_pc <- ifelse(res$gene_call == "Negative", 0,
+                    2^-(res$ct - ctrl$positive_mean_ct))
+  res$beta <- pmin(1, ifelse(ref_ok, res$pmr / 100,
+                             ifelse(no_ref, beta_pc, NA_real_)))
+  res$beta_method <- ifelse(is.na(res$beta), "",
+                            ifelse(ref_ok, "PMR/100 (reference-normalised)",
+                                   "vs positive control Ct (no reference)"))
+  res$beta_cutoff <- gene_value(s$beta_cutoff, res$target)
+  below <- res$role == "sample" & res$call == "Methylated" &
+    !is.na(res$beta) & res$beta < res$beta_cutoff
+  res$call[below] <- "Unmethylated"
+
   res$notes <- join_flags(
     ifelse(res$ref_status == "Failed",
            "reference gene failed - repeat sample", ""),
@@ -275,6 +321,8 @@ sample_results <- function(wells, controls, s) {
     ifelse(res$ref_status == "Low input",
            sprintf("low DNA input (reference Ct %.1f)", res$ref_ct), ""),
     ifelse(res$ref_status == "Not run", "no reference gene in run", ""),
+    ifelse(below, sprintf("beta %.3g below methylation cutoff %.3g", res$beta,
+                          res$beta_cutoff), ""),
     ifelse(res$ntc_status == "Fail", "NTC amplified for this gene", ""),
     ifelse(res$ntc_status == "Review", "NTC signal needs review", ""),
     ifelse(res$positive_status == "Fail", "positive control failed", ""),
@@ -293,12 +341,13 @@ sample_results <- function(wells, controls, s) {
 #' Wide summary table: one row per sample, one column per gene
 #'
 #' @param x A `qmsp_result` from [analyze_qmsp()].
-#' @param value Which value to show: `"call"`, `"ct"`, `"delta_ct"`,
-#'   `"ratio"` or `"pmr"`.
+#' @param value Which value to show: `"call"`, `"beta"`, `"ct"`,
+#'   `"delta_ct"`, `"ratio"` or `"pmr"`.
 #' @param controls Include control samples?
 #' @return A data frame.
 #' @export
-results_wide <- function(x, value = c("call", "ct", "delta_ct", "ratio", "pmr"),
+results_wide <- function(x, value = c("call", "beta", "ct", "delta_ct",
+                                      "ratio", "pmr"),
                          controls = FALSE) {
   value <- match.arg(value)
   r <- x$results

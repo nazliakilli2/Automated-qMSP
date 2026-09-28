@@ -98,13 +98,13 @@ plot_plate <- function(x, run = NULL, fill = c("ct", "target", "result")) {
 #' Methylation heatmap: samples x genes
 #'
 #' @param x A `qmsp_result` from [analyze_qmsp()].
-#' @param value `"call"` (categorical) or `"pmr"`, `"ratio"`, `"delta_ct"`,
+#' @param value `"call"` (categorical) or `"beta"`, `"pmr"`, `"ratio"`, `"delta_ct"`,
 #'   `"ct"` (numeric).
 #' @param controls Include control samples?
 #' @return A ggplot object.
 #' @export
-plot_methylation <- function(x, value = c("call", "pmr", "ratio", "delta_ct",
-                                          "ct"),
+plot_methylation <- function(x, value = c("call", "beta", "pmr", "ratio",
+                                          "delta_ct", "ct"),
                              controls = FALSE) {
   value <- match.arg(value)
   if (!inherits(x, "qmsp_result")) {

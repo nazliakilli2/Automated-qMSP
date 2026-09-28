@@ -15,7 +15,8 @@ export_results(x, path = "qmsp_results.xlsx")
 The path(s) written, invisibly.
 }
 \description{
-Writes one sheet per table: a wide summary of calls, the full per-gene
+Writes one sheet per table: the verdict per sample, wide tables of calls,
+beta values and PMR, the full per-gene
 results, the control checks, every well, and the settings used. If the
 `writexl` package is not installed, CSV files are written instead.
 }

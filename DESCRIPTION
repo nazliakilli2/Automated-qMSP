@@ -1,0 +1,27 @@
+Package: autoqmsp
+Type: Package
+Title: Automated Analysis of Quantitative Methylation-Specific PCR (qMSP) Runs
+Version: 0.1.0
+Authors@R: person("Nazli", "Akilli", role = c("aut", "cre"),
+    email = "hikmet.akilli@gmail.com")
+Description: Reads Applied Biosystems / QuantStudio experiment files (.eds)
+    directly, without manual export, and turns them into qMSP results: Ct
+    values, quality control of no-template and positive controls, reference
+    gene (e.g. beta-actin) normalisation, delta Ct, relative methylation,
+    percentage of methylated reference (PMR) and a methylated / unmethylated
+    call per sample and gene. Includes amplification-curve, plate-map and
+    methylation heatmap plots, Excel export and a point-and-click Shiny app.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Depends: R (>= 4.1)
+Imports:
+    xml2,
+    ggplot2,
+    stats,
+    utils
+Suggests:
+    writexl,
+    shiny,
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
+RoxygenNote: 7.3.1

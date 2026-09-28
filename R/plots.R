@@ -37,12 +37,6 @@ plot_amplification <- function(x, run = NULL, targets = NULL, samples = NULL,
                   title = paste(run, collapse = ", ")) +
     ggplot2::theme_bw(base_size = 11) +
     ggplot2::theme(legend.position = "bottom")
-  if ("result" %in% names(cv) && any(cv$result == "Review")) {
-    p <- p + ggplot2::aes(linetype = .data$result == "Review") +
-      ggplot2::scale_linetype_manual(values = c(`FALSE` = "solid",
-                                                `TRUE` = "dashed"),
-                                     name = "Needs review")
-  }
   th <- x$thresholds
   if (threshold && !is.null(th) && nrow(th)) {
     th <- th[th$run %in% run & th$target %in% unique(cv$target), ]
@@ -109,7 +103,7 @@ plot_plate <- function(x, run = NULL, fill = c("ct", "target", "result")) {
                                           na.value = "grey92", name = "Ct")
   } else if (fill == "result") {
     p <- p + ggplot2::scale_fill_manual(
-      values = c(Positive = "#fdae6b", Negative = "grey90", Review = "#fdd835"),
+      values = c(Positive = "#fdae6b", Negative = "grey90"),
       name = "Result")
   }
   p
@@ -118,13 +112,13 @@ plot_plate <- function(x, run = NULL, fill = c("ct", "target", "result")) {
 #' Methylation heatmap: samples x genes
 #'
 #' @param x A `qmsp_result` from [analyze_qmsp()].
-#' @param value `"call"` (categorical) or `"beta"`, `"pmr"`, `"ratio"`, `"delta_ct"`,
-#'   `"ct"` (numeric).
+#' @param value `"call"` (categorical) or `"ct"`, `"delta_ct"`, `"pmr"`,
+#'   `"ratio"`, `"beta"` (numeric).
 #' @param controls Include control samples?
 #' @return A ggplot object.
 #' @export
-plot_methylation <- function(x, value = c("call", "beta", "pmr", "ratio",
-                                          "delta_ct", "ct"),
+plot_methylation <- function(x, value = c("call", "ct", "delta_ct", "pmr",
+                                          "ratio", "beta"),
                              controls = FALSE) {
   value <- match.arg(value)
   if (!inherits(x, "qmsp_result")) {
@@ -140,8 +134,8 @@ plot_methylation <- function(x, value = c("call", "beta", "pmr", "ratio",
                            levels = rev(sort(unique(r$sample_label))))
   r$fill <- if (value == "call") r$call else r[[value]]
   r$text <- if (value == "call") {
-    ifelse(is.na(r$pmr) | r$call != "Methylated", "",
-           sprintf("%.0f", r$pmr))
+    ifelse(is.na(r$ct) | r$call == "Unmethylated", "",
+           sprintf("%.1f", r$ct))
   } else {
     ifelse(is.na(r[[value]]), "", formatC(r[[value]], digits = 3,
                                           format = "g"))
@@ -159,8 +153,8 @@ plot_methylation <- function(x, value = c("call", "beta", "pmr", "ratio",
   if (value == "call") {
     p + ggplot2::scale_fill_manual(
       values = c(Methylated = "#c0392b", Unmethylated = "#d6e4f0",
-                 Review = "#f5c542", Invalid = "grey70"),
-      drop = FALSE, name = "Call (PMR shown)")
+                 "Not determined" = "#f5c542"),
+      drop = FALSE, name = "Call (Ct shown)")
   } else {
     p + ggplot2::scale_fill_gradient(low = "#fff5f0", high = "#a50f15",
                                      na.value = "grey92", name = value)

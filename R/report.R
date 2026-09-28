@@ -1,19 +1,21 @@
-#' Per-sample verdict: potentially cancer, inconclusive or not risky
+#' Per-sample verdict: potential cancer, not determined or low risk
 #'
-#' Counts, for every sample, how many genes of the panel are methylated.
+#' Counts, for every sample, how many genes of the panel are methylated
+#' (Ct at or below 40 at a delta Rn threshold of 10,000).
 #' \itemize{
-#'   \item `Potentially cancer`: at least `min_methylated_genes` genes are
+#'   \item `Potential cancer`: at least `min_methylated_genes` genes are
 #'     methylated.
-#'   \item `Inconclusive`: fewer are methylated, but enough genes need review or
-#'     are invalid that the verdict could change. Repeat the sample.
-#'   \item `Not risky`: fewer than `min_methylated_genes` genes are methylated,
-#'     even counting the ones that need review.
+#'   \item `Not determined`: fewer are methylated, but genes that could not be
+#'     determined (failed reference gene, failed controls, replicates that
+#'     disagree) could change that. Repeat the sample.
+#'   \item `Low risk`: fewer than `min_methylated_genes` genes are methylated,
+#'     even counting the ones that could not be determined.
 #' }
 #' This is a research tool, not a diagnosis.
 #'
 #' @param x A `qmsp_result` from [analyze_qmsp()].
 #' @param min_methylated_genes Number of methylated genes needed for
-#'   `Potentially cancer`.
+#'   `Potential cancer`.
 #' @param panel Genes that count (default: all genes except the reference).
 #' @return A data frame with one row per run and sample.
 #' @export
@@ -31,25 +33,26 @@ risk_report <- function(x, min_methylated_genes = 1, panel = NULL) {
     call <- as.character(s$call)
     meth <- s$target[call == "Methylated"]
     n_meth <- length(meth)
-    n_unsure <- sum(call %in% c("Review", "Invalid"))
-    verdict <- if (n_meth >= min_methylated_genes) "Potentially cancer"
-      else if (n_meth + n_unsure >= min_methylated_genes) "Inconclusive"
-      else "Not risky"
+    nd <- s$target[call == "Not determined"]
+    verdict <- if (n_meth >= min_methylated_genes) "Potential cancer"
+      else if (n_meth + length(nd) >= min_methylated_genes) "Not determined"
+      else "Low risk"
+    meth_ct <- s$ct[call == "Methylated"]
     reason <- join_flags(
       sprintf("%d of %d genes methylated%s", n_meth, nrow(s),
-              if (n_meth) paste0(" (", paste(meth, collapse = ", "), ")") else ""),
-      if (any(call == "Review"))
-        paste0("needs review: ", paste(s$target[call == "Review"],
-                                       collapse = ", ")) else "",
-      if (any(call == "Invalid")) "reference gene failed - repeat sample" else "",
+              if (n_meth) paste0(" (", paste(sprintf("%s Ct %.1f", meth, meth_ct),
+                                             collapse = ", "), ")") else ""),
+      if (length(nd)) paste0("not determined: ", paste(nd, collapse = ", ")) else "",
+      if (any(s$ref_status == "Failed")) "reference gene failed - repeat sample" else "",
+      if (any(s$ref_status == "Missing")) "no reference gene well" else "",
       if (any(s$ref_status == "Low input")) "low DNA input" else ""
     )
     data.frame(
       run = ids$run[i], sample = ids$sample[i], verdict = verdict,
       reason = reason, n_genes = nrow(s), n_methylated = n_meth,
       methylated_genes = paste(meth, collapse = ", "),
-      n_review = sum(call == "Review"), n_invalid = sum(call == "Invalid"),
-      max_beta = if (all(is.na(s$beta))) NA_real_ else max(s$beta, na.rm = TRUE),
+      n_not_determined = length(nd),
+      lowest_ct = if (all(is.na(s$ct))) NA_real_ else min(s$ct, na.rm = TRUE),
       ref_ct = s$ref_ct[1],
       stringsAsFactors = FALSE
     )
@@ -61,13 +64,12 @@ risk_report <- function(x, min_methylated_genes = 1, panel = NULL) {
   out
 }
 
-verdict_levels <- function() c("Potentially cancer", "Inconclusive", "Not risky")
+verdict_levels <- function() c("Potential cancer", "Not determined", "Low risk")
 
 #' Write a printable HTML report
 #'
 #' A single self-contained HTML file with the verdict for every sample, the
-#' beta value of every gene, the control checks, the wells that need a manual
-#' look, and the settings used. Open it in a browser. To get a PDF, print it
+#' Ct of every gene, the control checks and the settings used. Open it in a browser. To get a PDF, print it
 #' and choose "Save as PDF".
 #'
 #' @param x A `qmsp_result` from [analyze_qmsp()].
@@ -92,27 +94,22 @@ report_html <- function(x, title = "qMSP report") {
     v <- as.character(rep$verdict[i])
     tr(c(esc(rep$sample[i]), if (multi_run) esc(rep$run[i]),
          sprintf('<span class="badge %s">%s</span>', verdict_class(v), esc(v)),
-         esc(rep$reason[i]), fmt_num(rep$max_beta[i], 3),
-         fmt_fixed(rep$ref_ct[i])))
+         esc(rep$reason[i]), fmt_fixed(rep$ref_ct[i])))
   }, character(1))
 
   s <- x$settings
   settings <- data.frame(
-    Setting = c("Reference gene", "NTC names", "Positive control names",
-                "Gene Ct cutoff (methylated if at or below)",
-                "Beta cutoff (methylated if at or above)",
-                "Fluorescence threshold (delta Rn)",
-                "Reference Ct max / low-input warning",
-                "Minimum Cq confidence", "Minimum curve height",
-                "Methylated genes needed for 'Potentially cancer'",
+    Setting = c("Rule", "Fluorescence threshold (delta Rn)",
+                "Ct cutoff (methylated if at or below)", "Reference gene",
+                "Reference gene Ct max / low-input warning",
+                "NTC names", "Positive control names",
+                "Methylated genes needed for 'Potential cancer'",
                 "Genes in panel"),
-    Value = c(s$reference %||% "none", s$ntc, s$positive,
-              fmt_setting(s$ct_cutoff), fmt_setting(s$beta_cutoff),
-              if (length(s$threshold)) paste(fmt_setting(s$threshold),
-                                             "(other genes: instrument)")
+    Value = c("A gene is methylated when its Ct is at or below the Ct cutoff",
+              if (length(s$threshold)) fmt_setting(s$threshold)
               else "instrument software",
-              paste(s$ref_ct_max, "/", s$ref_ct_warn), s$min_cq_conf,
-              paste0(100 * s$min_plateau, "% of positive control"),
+              fmt_setting(s$ct_cutoff), s$reference %||% "none",
+              paste(s$ref_ct_max, "/", s$ref_ct_warn), s$ntc, s$positive,
               s$min_methylated_genes,
               if (length(s$panel)) paste(s$panel, collapse = ", ") else
                 "all genes except the reference"),
@@ -124,13 +121,6 @@ report_html <- function(x, title = "qMSP report") {
     tr(c(if (multi_run) esc(ctrl$run[i]), esc(ctrl$target[i]),
          status_cell(ctrl$ntc_status[i]), status_cell(ctrl$positive_status[i]),
          fmt_fixed(ctrl$positive_mean_ct[i])))
-  }, character(1))
-
-  review <- x$wells[x$wells$result == "Review", ]
-  review_rows <- vapply(seq_len(nrow(review)), function(i) {
-    tr(c(if (multi_run) esc(review$run[i]), esc(review$well[i]),
-         esc(review$sample[i]), esc(review$target[i]),
-         fmt_fixed(review$ct[i]), esc(review$flags[i])))
   }, character(1))
 
   runs <- if (is.data.frame(x$meta)) x$meta else as.data.frame(x$meta)
@@ -150,29 +140,30 @@ report_html <- function(x, title = "qMSP report") {
     " with autoqmsp</p>",
     "<ul class=\"runs\">", run_list, "</ul>",
     '<p class="disclaimer">For research use only. These results are not a ',
-    "diagnosis. A &ldquo;Potentially cancer&rdquo; result means that ",
+    "diagnosis. A &ldquo;Potential cancer&rdquo; result means that ",
     "methylation of cancer-associated genes was detected. It must be confirmed ",
     "by a clinician with standard diagnostic tests.</p>",
+    '<p class="rule">A gene is <b>methylated</b> when its Ct is <b>',
+    esc(fmt_setting(s$ct_cutoff)), " or less</b>, with the Ct read where the ",
+    "amplification curve crosses <b>&Delta;Rn ",
+    if (length(s$threshold)) esc(fmt_thr(s$threshold)) else "(instrument threshold)",
+    "</b>.</p>",
     '<div class="tiles">',
-    tile(counts[["Potentially cancer"]], "Potentially cancer", "bad"),
-    tile(counts[["Inconclusive"]], "Inconclusive (repeat)", "warn"),
-    tile(counts[["Not risky"]], "Not risky", "good"),
+    tile(counts[["Potential cancer"]], "Potential cancer", "bad"),
+    tile(counts[["Not determined"]], "Not determined (repeat)", "warn"),
+    tile(counts[["Low risk"]], "Low risk", "good"),
     "</div>",
     "<h2>Result per sample</h2>",
     table_html(c("Sample", if (multi_run) "Run", "Result", "Why",
-                 "Highest beta", "Reference Ct"), verdict_rows),
-    "<h2>Methylation level (beta) per gene</h2>",
-    '<p class="muted">0 = unmethylated, 1 = as methylated as the positive ',
-    "control. Bold red = called methylated; yellow = needs review; ",
-    "grey = invalid.</p>",
-    beta_table(x, multi_run),
+                 "Reference Ct"), verdict_rows),
+    "<h2>Ct per gene</h2>",
+    '<p class="muted">Red = methylated (Ct at or below the cutoff); ',
+    "&ndash; = the curve did not reach the threshold; ",
+    "yellow (n.d.) = not determined.</p>",
+    ct_table(x, multi_run),
     "<h2>Control checks</h2>",
     table_html(c(if (multi_run) "Run", "Gene", "No-template control",
                  "Positive control", "Positive control Ct"), ctrl_rows),
-    if (nrow(review)) paste0(
-      "<h2>Wells to check by eye</h2>",
-      table_html(c(if (multi_run) "Run", "Well", "Sample", "Gene", "Ct",
-                   "Why"), review_rows)),
     "<h2>Settings used</h2>",
     table_html(c("Setting", "Value"),
                vapply(seq_len(nrow(settings)), function(i) {
@@ -182,7 +173,7 @@ report_html <- function(x, title = "qMSP report") {
   )
 }
 
-beta_table <- function(x, multi_run) {
+ct_table <- function(x, multi_run) {
   r <- x$results[x$results$role == "sample", ]
   if (length(x$settings$panel)) r <- r[r$target %in% x$settings$panel, ]
   ids <- unique(r[, c("run", "sample")])
@@ -192,14 +183,13 @@ beta_table <- function(x, multi_run) {
       m <- r[r$run == ids$run[i] & r$sample == ids$sample[i] & r$target == g, ]
       if (!nrow(m)) return('<td class="na"></td>')
       call <- as.character(m$call[1])
-      b <- m$beta[1]
-      cls <- switch(call, Methylated = "meth", Review = "review",
-                    Invalid = "invalid", "")
-      shade <- if (!is.na(b) && call == "Methylated")
-        sprintf(' style="background:rgba(192,57,43,%.2f)"', 0.15 + 0.6 * b) else ""
-      label <- if (call == "Invalid") "invalid" else
-        if (call == "Review") paste0(fmt_num(b, 3), " ?") else fmt_num(b, 3)
-      sprintf('<td class="%s"%s title="%s">%s</td>', cls, shade, esc(call),
+      cls <- switch(call, Methylated = "meth", "Not determined" = "nd", "")
+      label <- if (call == "Not determined") {
+        paste0(if (is.na(m$ct[1])) "" else paste0(fmt_fixed(m$ct[1]), " "),
+               "n.d.")
+      } else fmt_fixed(m$ct[1])
+      sprintf('<td class="%s" title="%s">%s</td>', cls,
+              esc(paste0(call, if (nzchar(m$notes[1])) paste0(": ", m$notes[1]))),
               label)
     }, character(1))
     paste0("<tr><td>", esc(ids$sample[i]), "</td>",
@@ -228,8 +218,9 @@ report_css <- function() {
     "table{border-collapse:collapse;width:100%;background:#fff;font-size:13px}",
     "th,td{border:1px solid #e3e3e0;padding:6px 8px;text-align:left;",
     "vertical-align:top}th{background:#efefec}",
-    "td.meth{font-weight:700;color:#7b1d13}td.review{background:#fdf1c4}",
-    "td.invalid{background:#e0e0e0;color:#555}td.na{background:#fafafa}",
+    ".rule{background:#fff;border-left:4px solid #1f6fb4;padding:10px 12px}",
+    "td.meth{font-weight:700;color:#7b1d13;background:#fbe3e0}",
+    "td.nd{background:#fdf1c4}td.na{background:#fafafa}",
     ".badge{display:inline-block;padding:2px 8px;border-radius:10px;",
     "font-weight:600;white-space:nowrap}",
     ".badge.bad{background:#fbe3e0;color:#9b2c1f}",
@@ -240,8 +231,8 @@ report_css <- function() {
 }
 
 verdict_class <- function(v) {
-  switch(v, "Potentially cancer" = "bad", "Inconclusive" = "warn",
-         "Not risky" = "good", "")
+  switch(v, "Potential cancer" = "bad", "Not determined" = "warn",
+         "Low risk" = "good", "")
 }
 
 status_cell <- function(status) {
@@ -283,6 +274,11 @@ fmt_num <- function(x, digits) {
 }
 
 fmt_fixed <- function(x) ifelse(is.na(x), "&ndash;", sprintf("%.1f", x))
+
+fmt_thr <- function(v) {
+  if (!is.null(names(v))) return(fmt_setting(v))
+  formatC(v, format = "fg", big.mark = ",", digits = 6)
+}
 
 fmt_setting <- function(v) {
   nm <- names(v)

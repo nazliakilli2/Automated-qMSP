@@ -10,101 +10,78 @@ analyze_qmsp(
   ntc = "NTC|dH2O|dH20|water|blank|^NK",
   positive = "H460|A549|HT29|positive|^PC\\\\b",
   ct_cutoff = 40,
-  beta_cutoff = 0,
+  threshold = 10000,
   ref_ct_max = 40,
   ref_ct_warn = 35,
-  min_cq_conf = 0.5,
-  min_plateau = 0.2,
   min_methylated_genes = 1,
-  panel = NULL,
-  threshold = NULL
+  panel = NULL
 )
 }
 \arguments{
 \item{x}{A `qmsp_run` from [read_eds()] / [read_eds_files()].}
 
 \item{reference}{Regular expression matching the reference gene name
-(case-insensitive). Set to `NULL` when the run has no reference gene;
-calls are then made from the gene Ct alone.}
+(case-insensitive). Set to `NULL` when the run has no reference gene.}
 
 \item{ntc}{Regular expression matching no-template control sample names.}
 
 \item{positive}{Regular expression matching positive control sample names
 (e.g. fully methylated / bisulfite-converted cell line DNA).}
 
-\item{ct_cutoff}{Genes with Ct above this are called unmethylated. A single
-number, or a named vector with per-gene values plus one unnamed default.}
+\item{ct_cutoff}{A gene is methylated when its Ct is at or below this.
+Lab standard: 40.}
 
-\item{beta_cutoff}{Genes with a beta value below this are called
-unmethylated (0 = any detected methylation counts). Single number or
-named per-gene vector like `ct_cutoff`.}
+\item{threshold}{Fluorescence (delta Rn) threshold at which the Ct is read.
+Lab standard: 10,000, for every gene including the reference gene.
+`NULL` uses the Ct values of the instrument software instead.}
 
-\item{ref_ct_max}{Samples whose reference Ct is above this (or undetermined)
-are invalid.}
+\item{ref_ct_max}{A sample whose reference gene Ct is above this (or
+undetermined) is not determined.}
 
 \item{ref_ct_warn}{Reference Ct above this is flagged as low DNA input.}
 
-\item{min_cq_conf}{Amplified wells with an instrument Cq confidence below this
-are sent to review.}
-
-\item{min_plateau}{Amplified wells whose final delta Rn is below this
-fraction of the positive controls' (same gene and run) are sent to review.}
-
 \item{min_methylated_genes}{Number of methylated panel genes needed for a
-`Potentially cancer` verdict.}
+`Potential cancer` verdict.}
 
 \item{panel}{Genes that count for the verdict (default: all genes except the
 reference).}
-
-\item{threshold}{Fluorescence (delta Rn) threshold per gene. `NULL` (the
-default) keeps the Ct values of the instrument software. A number, or a
-named vector such as `c(TAC1 = 0.2)`, recomputes the Ct of those genes as
-the cycle where the amplification curve crosses the threshold and stays
-above it (log-linear interpolation; undetermined if it ends below). Genes
-without a value keep the instrument Ct.}
 }
 \value{
 A `qmsp_result` list with `report` (one verdict per run and
   sample), `results` (one row per run, sample and gene), `controls` (NTC /
-  positive control status per run and gene), `wells` (every well with its role, flags and result), `curves`,
-  `thresholds` and `settings`.
+  positive control status per run and gene), `wells` (every well with its
+  role, Ct and result), `curves`, `thresholds` and `settings`.
 }
 \description{
-Turns raw well results into qMSP calls. The steps are:
+Turns raw well results into qMSP calls with one fixed rule:
+\strong{a gene is methylated when its Ct is 40 or less}, where the Ct is
+read where the amplification curve crosses a delta Rn of \strong{10,000}.
+}
+\details{
+The steps are:
 \enumerate{
   \item every well is labelled as no-template control (NTC), positive
     control or sample, using the sample name (or Task = "NTC");
-  \item every well gets a result -- `Positive`, `Negative` or `Review` --
-    from its Ct, the instrument's amplification status and Cq confidence,
-    and the height of its amplification curve compared with the positive
-    controls of the same gene (low, linear "drift" curves are not trusted);
+  \item the Ct of every well is read from its amplification curve at the
+    threshold (delta Rn 10,000): the cycle where the curve crosses the
+    threshold and stays above it (log-linear interpolation). Curves that
+    never reach it have no Ct;
+  \item a well is `Positive` when its Ct is at or below the Ct cutoff (40),
+    otherwise `Negative`;
   \item NTC and positive controls are checked per run and gene;
-  \item replicates are merged per run, sample and gene, the reference gene
-    (e.g. beta-actin) is checked, and the methylation call, delta Ct,
-    methylation ratio and PMR are computed.
-}
-}
-\details{
-Methylation values:
-\itemize{
-  \item `delta_ct` = Ct(gene) - Ct(reference)
-  \item `ratio` = 2^-delta_ct (0 for unmethylated samples with a valid
-    reference)
-  \item `pmr` = percentage of methylated reference: 100 x ratio(sample) /
-    mean ratio(positive controls) for the same gene in the same run.
-  \item `beta` = methylation level between 0 (unmethylated) and 1 (as
-    methylated as the fully methylated positive control): PMR / 100, capped
-    at 1. In runs without a reference gene it is 2^-(Ct(sample) -
-    Ct(positive control)), capped at 1.
+  \item replicates are merged per run, sample and gene, and every gene gets
+    a call: `Methylated`, `Unmethylated` or `Not determined`.
 }
 
-A gene is called `Methylated` when its Ct is at or below `ct_cutoff`, its
-wells pass QC, and its beta is at or above `beta_cutoff`. Both cutoffs can be
-set per gene: `ct_cutoff = c(40, TAC1 = 38)` uses 38 for TAC1 and 40 for all
-other genes.
+A gene is `Not determined` when the call cannot be trusted: the sample's
+reference gene (e.g. beta-actin) has no Ct at or below `ref_ct_max`, the
+no-template control of that gene amplified (for a methylated call), the
+positive control of that gene did not amplify (for an unmethylated call),
+or fewer than half of the replicates agree.
 
-Finally every sample gets a verdict (see [risk_report()]):
-`Potentially cancer` when at least `min_methylated_genes` of the panel genes
-are methylated, `Inconclusive` when that could not be decided because genes
-need review or the sample failed, otherwise `Not risky`.
+Every sample then gets a verdict (see [risk_report()]): `Potential cancer`,
+`Not determined` or `Low risk`.
+
+Delta Ct, PMR and beta are also computed for information; they do not
+change the call.
 }

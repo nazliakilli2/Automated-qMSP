@@ -18,15 +18,16 @@ test_that("beta without a reference gene is relative to the positive control Ct"
   expect_match(s1$beta_method, "no reference")
 })
 
-test_that("the beta cutoff decides methylated or not", {
-  expect_equal(as.character(res(beta_cutoff = 0.2)$results$call[
-    res()$results$sample == "S1"]), "Unmethylated")
-  expect_equal(as.character(res(beta_cutoff = 0.1)$results$call[
-    res()$results$sample == "S1"]), "Methylated")
+test_that("beta is information only: it does not change the call", {
+  r <- res()$results
+  s1 <- r[r$sample == "S1", ]
+  expect_lt(s1$beta, 0.2)
+  expect_equal(as.character(s1$call), "Methylated")
+  expect_error(res(beta_cutoff = 0.2), "unused argument")
 })
 
 test_that("cutoffs can be set per gene", {
-  r <- res(ct_cutoff = c(40, GENE1 = 29))
+  r <- res(ct_cutoff = c(40, GENE1 = 31))
   expect_equal(as.character(r$results$call[r$results$sample == "S1"]),
                "Unmethylated")
   expect_error(res(ct_cutoff = c(GENE1 = 29)), "unnamed default")
@@ -34,21 +35,23 @@ test_that("cutoffs can be set per gene", {
 
 test_that("every sample gets a verdict", {
   r <- res()
-  expect_equal(verdict_of(r, "S1"), "Potentially cancer")
-  expect_equal(verdict_of(r, "S2"), "Not risky")
-  expect_equal(verdict_of(r, "S3"), "Inconclusive")   # reference failed
-  expect_equal(verdict_of(r, "S4"), "Inconclusive")   # needs review
+  expect_equal(verdict_of(r, "S1"), "Potential cancer")
+  expect_equal(verdict_of(r, "S2"), "Low risk")
+  expect_equal(verdict_of(r, "S3"), "Not determined")   # reference failed
+  expect_equal(verdict_of(r, "S4"), "Low risk")         # drift curve
   expect_false(any(r$report$sample %in% c("PC", "NTC")))
 
   r2 <- res(min_methylated_genes = 2)
-  expect_equal(verdict_of(r2, "S1"), "Not risky")
+  expect_equal(verdict_of(r2, "S1"), "Low risk")
   expect_equal(verdict_of(res(panel = "OTHER"), "S1"), character())
 })
 
 test_that("the HTML report is written", {
   f <- write_report(res(), tempfile(fileext = ".html"))
   html <- paste(readLines(f), collapse = "\n")
-  expect_match(html, "Potentially cancer")
+  expect_match(html, "Potential cancer")
+  expect_match(html, "10,000")
+  expect_match(html, "Ct per gene")
   expect_match(html, "not a diagnosis")
   expect_match(html, "<table")
 })

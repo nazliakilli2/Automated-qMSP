@@ -18,7 +18,6 @@ write_report(x, file = "qmsp_report.html", title = "qMSP report")
 }
 \description{
 A single self-contained HTML file with the verdict for every sample, the
-beta value of every gene, the control checks, the wells that need a manual
-look, and the settings used. Open it in a browser. To get a PDF, print it
+Ct of every gene, the control checks and the settings used. Open it in a browser. To get a PDF, print it
 and choose "Save as PDF".
 }

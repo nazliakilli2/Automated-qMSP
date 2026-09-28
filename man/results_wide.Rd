@@ -6,15 +6,15 @@
 \usage{
 results_wide(
   x,
-  value = c("call", "beta", "ct", "delta_ct", "ratio", "pmr"),
+  value = c("call", "ct", "delta_ct", "ratio", "pmr", "beta"),
   controls = FALSE
 )
 }
 \arguments{
 \item{x}{A `qmsp_result` from [analyze_qmsp()].}
 
-\item{value}{Which value to show: `"call"`, `"beta"`, `"ct"`,
-`"delta_ct"`, `"ratio"` or `"pmr"`.}
+\item{value}{Which value to show: `"call"`, `"ct"`, `"delta_ct"`,
+`"ratio"`, `"pmr"` or `"beta"`.}
 
 \item{controls}{Include control samples?}
 }

@@ -1,8 +1,8 @@
 #' Export results to Excel (or CSV files)
 #'
-#' Writes one sheet per table: the verdict per sample, wide tables of calls,
-#' beta values and PMR, the full per-gene
-#' results, the control checks, the fluorescence thresholds, every well, and
+#' Writes one sheet per table: the verdict per sample, wide tables of calls
+#' and Ct values, the full per-gene results (with delta Ct, PMR and beta for
+#' information), the control checks, the fluorescence thresholds, every well, and
 #' the settings used. If the
 #' `writexl` package is not installed, CSV files are written instead.
 #'
@@ -20,8 +20,7 @@ export_results <- function(x, path = "qmsp_results.xlsx") {
   sheets <- list(
     Report = report,
     Calls = results_wide(x, "call"),
-    Beta = results_wide(x, "beta"),
-    PMR = results_wide(x, "pmr"),
+    Ct = results_wide(x, "ct"),
     Results = within_results(x$results),
     Controls = x$controls,
     Thresholds = x$thresholds,

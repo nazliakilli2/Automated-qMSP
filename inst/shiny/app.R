@@ -25,8 +25,6 @@ css <- "
   .code-box pre { background:#f3f3f0; }
 "
 
-gene_id <- function(prefix, gene) paste0(prefix, gsub("[^A-Za-z0-9]", "_", gene))
-
 ui <- navbarPage(
   title = "autoqmsp",
   id = "tabs",
@@ -55,21 +53,19 @@ ui <- navbarPage(
       column(6,
         div(class = "card",
             h4("When is a gene methylated?"),
-            sliderInput("ct_cutoff", "Ct cutoff: methylated if Ct is at or below",
-                        min = 25, max = 50, value = 40, step = 0.5),
-            sliderInput("beta_cutoff",
-                        "Beta cutoff: methylated if beta is at or above",
-                        min = 0, max = 1, value = 0, step = 0.01),
+            p("A gene is ", strong("methylated"), " when its ", strong("Ct is 40 or less"),
+              ". The Ct is read where the amplification curve crosses ",
+              strong(HTML("&Delta;Rn = 10,000")), " (for every gene, including the reference gene)."),
             p(class = "hint",
-              "Beta is the methylation level from 0 (none) to 1 (as methylated ",
-              "as the positive control). Keep it at 0 to count any detected ",
-              "methylation."),
-            checkboxInput("per_gene", "Use different cutoffs for each gene"),
-            conditionalPanel("input.per_gene", uiOutput("per_gene_inputs"))),
+              "These are the lab's fixed settings. A gene is 'not determined' when ",
+              "the sample's reference gene has no Ct of 40 or less, the gene's ",
+              "water control amplified (for a methylated result), its positive ",
+              "control did not amplify (for an unmethylated result), or the ",
+              "replicates disagree.")),
         div(class = "card",
             h4("Cancer risk decision"),
             numericInput("min_genes",
-                         "A sample is 'Potentially cancer' when at least this many genes are methylated",
+                         "A sample is 'Potential cancer' when at least this many genes are methylated",
                          value = 1, min = 1, step = 1),
             uiOutput("panel_input"))
       ),
@@ -78,21 +74,12 @@ ui <- navbarPage(
             h4("Controls"),
             uiOutput("control_inputs")),
         div(class = "card",
-            checkboxInput("advanced", strong("Show advanced quality settings")),
+            checkboxInput("advanced", strong("Show advanced settings")),
             conditionalPanel(
               "input.advanced",
-              numericInput("ref_ct_max",
-                           "Reference gene: sample invalid if Ct is above", 40,
-                           min = 20, max = 50, step = 0.5),
               numericInput("ref_ct_warn",
                            "Reference gene: warn 'low DNA input' if Ct is above",
-                           35, min = 20, max = 50, step = 0.5),
-              numericInput("min_cq_conf",
-                           "Send a well to review if the instrument's Cq confidence is below",
-                           0.5, min = 0, max = 1, step = 0.05),
-              numericInput("min_plateau",
-                           "Send a well to review if its curve is lower than this fraction of the positive control",
-                           0.2, min = 0, max = 1, step = 0.05)
+                           35, min = 20, max = 50, step = 0.5)
             ))
       )
     ),
@@ -120,11 +107,9 @@ ui <- navbarPage(
     tabsetPanel(
       tabPanel("Heatmap",
                radioButtons("heat_value", NULL, inline = TRUE,
-                            choices = c("Call" = "call", "Beta" = "beta",
-                                        "Ct" = "ct")),
+                            choices = c("Call" = "call", "Ct" = "ct")),
                plotOutput("heatmap", height = "650px")),
       tabPanel("All results", tableOutput("results")),
-      tabPanel("Wells to review", tableOutput("review")),
       tabPanel("Amplification curves",
                fluidRow(
                  column(4, selectInput("curve_run", "Run", NULL)),
@@ -207,32 +192,6 @@ server <- function(input, output, session) {
                        panel_genes(), selected = panel_genes(), inline = TRUE)
   })
 
-  output$per_gene_inputs <- renderUI({
-    if (is.null(input$files)) return(p(class = "hint", "Upload files first."))
-    rows <- lapply(panel_genes(), function(g) {
-      fluidRow(
-        column(4, tags$label(g, style = "padding-top:8px")),
-        column(4, numericInput(gene_id("ct_", g), NULL,
-                               isolate(input$ct_cutoff), step = 0.5)),
-        column(4, numericInput(gene_id("beta_", g), NULL,
-                               isolate(input$beta_cutoff), min = 0, max = 1,
-                               step = 0.01))
-      )
-    })
-    tagList(fluidRow(column(4, strong("Gene")), column(4, strong("Ct cutoff")),
-                     column(4, strong("Beta cutoff"))), rows)
-  })
-
-  per_gene <- function(prefix, default) {
-    if (!isTRUE(input$per_gene)) return(default)
-    vals <- vapply(panel_genes(), function(g) {
-      v <- input[[gene_id(prefix, g)]]
-      if (is.null(v) || is.na(v)) default else v
-    }, numeric(1))
-    vals <- vals[vals != default]
-    c(default, vals)
-  }
-
   exact <- function(x) {
     if (!length(x)) return("(?!)")   # matches nothing
     paste0("^(", paste(gsub("([][{}()+*^$|\\\\?.])", "\\\\\\1", x),
@@ -245,10 +204,8 @@ server <- function(input, output, session) {
       reference = if (is.null(reference())) NULL else exact(reference()),
       ntc = exact(input$ntc_samples),
       positive = exact(input$pos_samples),
-      ct_cutoff = per_gene("ct_", input$ct_cutoff),
-      beta_cutoff = per_gene("beta_", input$beta_cutoff),
-      ref_ct_max = input$ref_ct_max, ref_ct_warn = input$ref_ct_warn,
-      min_cq_conf = input$min_cq_conf, min_plateau = input$min_plateau,
+      ct_cutoff = 40, threshold = 10000, ref_ct_max = 40,
+      ref_ct_warn = input$ref_ct_warn,
       min_methylated_genes = input$min_genes,
       panel = input$panel
     )
@@ -320,13 +277,7 @@ server <- function(input, output, session) {
   output$results <- renderTable({
     r <- result()$results
     r$call <- as.character(r$call)
-    r[, c("run", "sample", "role", "target", "ct", "ref_ct", "delta_ct",
-          "pmr", "beta", "call", "notes")]
-  }, digits = 3)
-  output$review <- renderTable({
-    w <- result()$wells
-    w[w$result == "Review",
-      c("run", "well", "sample", "target", "ct", "cq_conf", "flags")]
+    r[, c("run", "sample", "role", "target", "ct", "ref_ct", "call", "notes")]
   }, digits = 2)
   output$curves <- renderPlot({
     req(input$curve_run)

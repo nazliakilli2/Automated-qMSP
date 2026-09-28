@@ -42,8 +42,8 @@ DATA_DIR = os.path.join(OUT_DIR, "data")
 REFERENCE_RE = r"ACTB|B.?ACTIN|BETA.?ACTIN"
 NTC_RE = r"NTC|dH2O|dH20|water|blank|^NK"
 POSITIVE_RE = r"H460|A549|HT29|positive|^PC\b"
-DEFAULT_CT_CUTOFF = 40.0
-REF_CT_MAX = 40.0
+THRESHOLD = 10000.0   # delta Rn where the Ct is read (lab standard)
+CT_CUTOFF = 40.0      # methylated when Ct <= this (lab standard)
 COLORS = {"detected": "#c0392b", "not detected": "#a7b1bc",
           "positive": "#1f6fb4", "ntc": "#222222"}
 
@@ -107,18 +107,33 @@ def load_data():
             "thresholds": {(r, t): v for r, t, v in
                            zip(thr.get("run", []), thr.get("target", []), thr.get("threshold", []))}}
 
-def well_cts(data, run, gene, threshold=None):
-    """Ct of every well: the instrument's, or recomputed at a user threshold."""
+def well_cts(data, run, gene, threshold=THRESHOLD):
+    """Ct of every well read at the threshold; the instrument's Ct is kept in instrument_ct."""
     w = data["wells"]
     w = w[(w["run"] == run) & (w["target"] == gene)].copy()
-    if threshold is not None:
-        cts = []
-        for idx in w["well_index"]:
-            c = data["curves"].get((run, idx, gene))
-            cts.append(None if c is None else
-                       ct_at_threshold(list(c["cycle"]), list(c["delta_rn"]), threshold))
-        w["ct"] = pd.to_numeric(pd.Series(cts, index=w.index, dtype=object), errors="coerce")
+    w["instrument_ct"] = w["ct"]
+    cts = []
+    for idx in w["well_index"]:
+        c = data["curves"].get((run, idx, gene))
+        cts.append(None if c is None else
+                   ct_at_threshold(list(c["cycle"]), list(c["delta_rn"]), threshold))
+    w["ct"] = pd.to_numeric(pd.Series(cts, index=w.index, dtype=object), errors="coerce")
     return w
+
+def add_lines(fig, data, log, row=None, col=None, label=True):
+    """Threshold (green, horizontal) and Ct cutoff (red, vertical)."""
+    kw = {} if row is None else dict(row=row, col=col)
+    fig.add_hline(y=THRESHOLD, line_dash="dot", line_color="#27ae60", line_width=2, **kw)
+    fig.add_vrect(x0=CT_CUTOFF, x1=max(data["n_cycles"], CT_CUTOFF + 1), fillcolor="#888",
+                  opacity=0.08, line_width=0, **kw)
+    fig.add_vline(x=CT_CUTOFF, line_dash="dash", line_color="#c0392b", line_width=2, **kw)
+    if label:
+        # annotations on a log axis take log10 positions
+        fig.add_annotation(x=0.01, xref="paper", y=math.log10(THRESHOLD) if log else THRESHOLD,
+                           yref="y", text="threshold ΔRn " + fmt_thr(THRESHOLD), showarrow=False,
+                           xanchor="left", yanchor="bottom", font_color="#27ae60")
+        fig.add_annotation(x=CT_CUTOFF, y=1, xref="x", yref="paper", text="Ct %g" % CT_CUTOFF,
+                           showarrow=False, xanchor="left", yanchor="top", font_color="#c0392b")
 
 def add_curves(fig, data, w, run, gene, cutoff, log, row=None, col=None, legend=False):
     floor = 10 ** (data["top"] - 4)
@@ -129,7 +144,7 @@ def add_curves(fig, data, w, run, gene, cutoff, log, row=None, col=None, legend=
         detected = pd.notna(r["ct"]) and r["ct"] <= cutoff
         kind = r["role"] if r["role"] != "sample" else ("detected" if detected else "not detected")
         y = c["delta_rn"].clip(lower=floor) if log else c["delta_rn"]
-        ct_txt = "Undetermined" if pd.isna(r["ct"]) else "Ct %.2f" % r["ct"]
+        ct_txt = "no Ct (does not reach the threshold)" if pd.isna(r["ct"]) else "Ct %.2f" % r["ct"]
         fig.add_trace(go.Scatter(
             x=c["cycle"], y=y, mode="lines", showlegend=False, legendgroup=kind,
             line=dict(color=COLORS[kind], width=2 if kind == "detected" else 1.3,
@@ -137,7 +152,7 @@ def add_curves(fig, data, w, run, gene, cutoff, log, row=None, col=None, legend=
             hovertemplate="<b>%s</b> (%s)<br>%s<br>cycle %%{x}, ΔRn %%{y:.4g}<extra></extra>"
                           % (r["sample"], r["well"], ct_txt)), row=row, col=col)
     if legend:
-        labels = {"detected": "Sample, Ct ≤ cutoff", "not detected": "Sample, not detected",
+        labels = {"detected": "Sample, Ct ≤ %g" % cutoff, "not detected": "Sample, no Ct ≤ %g" % cutoff,
                   "positive": "Positive control", "ntc": "No-template control"}
         for kind, label in labels.items():
             fig.add_trace(go.Scatter(x=[None], y=[None], mode="lines", name=label,
@@ -153,14 +168,13 @@ def fmt_thr(v):
 def show_table(df, max_rows=None):
     display(HTML(df.to_html(index=False, escape=True, na_rep="–", max_rows=max_rows)))
 
-SETTINGS = globals().get("SETTINGS") or {"ct_cutoff": {}, "threshold": {}}
 display(HTML("<h3 style='color:#2e8b57'>✔ Ready. Go to step ②.</h3>"))
 '''
 
 UPLOAD = r'''
 #@title ② Upload your .eds files and look at the curves { display-mode: "form" }
 #@markdown Click ▶, then **Choose Files** and select one or more `.eds` files.
-#@markdown The amplification curves of every run and gene are drawn below.
+#@markdown The amplification curves of every run and gene are drawn below, with the threshold (ΔRn 10,000) and the Ct cutoff (40).
 #@markdown Run this step again to replace the files.
 import os, shutil
 from google.colab import files
@@ -190,7 +204,6 @@ utils::write.csv(runs$thresholds, file.path(out, "thresholds.csv"), row.names = 
 """, os.path.join(OUT_DIR, "read_script.R"))
 
 DATA = load_data()
-SETTINGS = {"ct_cutoff": {}, "threshold": {}}  # new files: start from the defaults
 _w = DATA["wells"]
 _summary = _w.groupby("run").agg(
     samples=("sample", lambda s: s[_w.loc[s.index, "role"] == "sample"].nunique()),
@@ -207,146 +220,88 @@ for _run in dict.fromkeys(_w["run"]):
                          horizontal_spacing=0.06, vertical_spacing=0.12 if _nrow > 1 else 0.1)
     for _i, _gene in enumerate(_genes):
         _r, _c = _i // _ncol + 1, _i % _ncol + 1
-        add_curves(_fig, DATA, well_cts(DATA, _run, _gene), _run, _gene,
-                   REF_CT_MAX if re.search(REFERENCE_RE, _gene, re.I) else DEFAULT_CT_CUTOFF,
+        add_curves(_fig, DATA, well_cts(DATA, _run, _gene), _run, _gene, CT_CUTOFF,
                    log=True, row=_r, col=_c, legend=(_i == 0))
-        _thr = DATA["thresholds"].get((_run, _gene))
-        if _thr is not None and not pd.isna(_thr):
-            _fig.add_hline(y=_thr, line_dash="dot", line_color="#27ae60", row=_r, col=_c)
+        add_lines(_fig, DATA, True, row=_r, col=_c, label=False)
     _fig.update_layout(title=dict(text="<b>%s</b>" % _run, font_size=15),
                        height=300 * _nrow + 90, template="plotly_white",
                        margin=dict(l=50, r=20, t=90, b=40),
                        legend=dict(orientation="h", y=1.02, yanchor="bottom", x=1, xanchor="right"))
     _fig.update_xaxes(title_text="Cycle", row=_nrow)
     _fig.show()
-display(HTML("<p>Green dotted line: the instrument's threshold. "
-             "Hover over a curve to see the sample. Go to step ③ to adjust the "
-             "threshold and the Ct cutoff.</p>"))
+display(HTML("<p><span style='color:#27ae60'><b>Green dotted line</b></span>: the threshold, "
+             "ΔRn %s. The Ct is read where a curve crosses it. "
+             "<span style='color:#c0392b'><b>Red dashed line</b></span>: Ct %g. A gene is methylated "
+             "when its curve crosses the threshold at or before it. Hover over a curve to see the sample. "
+             "Go to step ③ to look at one gene at a time.</p>" % (fmt_thr(THRESHOLD), CT_CUTOFF)))
 '''
 
 EXPLORE = r'''
-#@title ③ Adjust the threshold and Ct cutoff on the curves { display-mode: "form" }
-#@markdown Click ▶. Choose a run and gene, then move the sliders: the lines on the graph and the table follow.
-#@markdown - **Threshold** (green, horizontal): where Ct is read. It starts at the instrument's threshold; a new value is used for that gene in all runs.
-#@markdown - **Ct cutoff** (red, vertical): wells that cross the threshold after it count as not methylated.
+#@title ③ Look at each gene { display-mode: "form" }
+#@markdown Click ▶, then choose a run and a gene. The graph shows the fixed lab rule:
+#@markdown - **Threshold** (green, horizontal): ΔRn 10,000. The Ct is the cycle where the curve crosses it.
+#@markdown - **Ct cutoff** (red, vertical): 40. A gene is **methylated** when its Ct is 40 or less.
 #@markdown
-#@markdown Your choices are kept and used in step ④. You can skip this step to keep the defaults (instrument threshold, Ct cutoff 40).
+#@markdown The table lists every well with its Ct. You can skip this step.
 import ipywidgets as W
 from IPython.display import display, HTML
 
 if "DATA" not in globals():
     raise SystemExit("Run step ② first.")
 
-def _explorer(data, settings):
+def _viewer(data):
     wells = data["wells"]
     runs = list(dict.fromkeys(wells["run"]))
     genes_of = lambda run: list(dict.fromkeys(wells.loc[wells["run"] == run, "target"]))
-    is_ref = lambda gene: bool(re.search(REFERENCE_RE, gene, re.I))
-    wide = W.Layout(width="440px")
-    style = {"description_width": "90px"}
-
+    style = {"description_width": "60px"}
     run_dd = W.Dropdown(options=runs, description="Run", layout=W.Layout(width="600px"), style=style)
-    gene_dd = W.Dropdown(options=genes_of(runs[0]), description="Gene", layout=wide, style=style)
+    gene_dd = W.Dropdown(options=genes_of(runs[0]), description="Gene",
+                         layout=W.Layout(width="380px"), style=style)
     log_cb = W.Checkbox(value=True, description="Log scale", indent=False)
-    thr_sl = W.FloatLogSlider(base=10, min=data["top"] - 4, max=data["top"], step=0.01,
-                              description="Threshold", continuous_update=False,
-                              readout_format=",.0f" if data["top"] >= 3 else ".3g",
-                              layout=wide, style=style)
-    reset = W.Button(description="Use instrument threshold", icon="undo",
-                     layout=W.Layout(width="220px"))
-    thr_note = W.HTML()
-    cut_sl = W.FloatSlider(min=25, max=50, step=0.5, description="Ct cutoff",
-                           continuous_update=False, layout=wide, style=style)
     info = W.HTML()
     out = W.Output()
-    chosen = W.HTML()
     busy = {"on": False}
 
-    def instrument_thr(run, gene):
-        v = data["thresholds"].get((run, gene))
-        return None if v is None or pd.isna(v) else float(v)
-
-    def current():
-        run, gene = run_dd.value, gene_dd.value
-        own = settings["threshold"].get(gene)
-        cut = REF_CT_MAX if is_ref(gene) else settings["ct_cutoff"].get(gene, DEFAULT_CT_CUTOFF)
-        return run, gene, own, cut
-
-    def sync_sliders():
-        busy["on"] = True
-        run, gene, own, cut = current()
-        inst = instrument_thr(run, gene)
-        thr_sl.value = own if own is not None else (inst or 10 ** (data["top"] - 2))
-        cut_sl.value = cut
-        cut_sl.disabled = is_ref(gene)
-        cut_sl.description = "Ct max" if is_ref(gene) else "Ct cutoff"
-        busy["on"] = False
-
     def draw(*_):
-        run, gene, own, cut = current()
-        inst = instrument_thr(run, gene)
-        thr = own if own is not None else inst
-        w = well_cts(data, run, gene, own)
-        if own is not None:
-            w["instrument_ct"] = well_cts(data, run, gene)["ct"]
-
-        thr_note.value = (
-            "<span style='color:#b9770e'>Your threshold, used for %s in all runs "
-            "(instrument: %s)</span>" % (gene, fmt_thr(inst) if inst else "none")
-            if own is not None else "<span style='color:#777'>Instrument threshold</span>")
+        if busy["on"]:
+            return
+        run, gene = run_dd.value, gene_dd.value
+        is_ref = bool(re.search(REFERENCE_RE, gene, re.I))
+        w = well_cts(data, run, gene)
 
         fig = go.Figure()
-        add_curves(fig, data, w, run, gene, cut, log_cb.value, legend=True)
-        if thr is not None:
-            fig.add_hline(y=thr, line_dash="dot", line_color="#27ae60", line_width=2)
-            # annotations on a log axis take log10 positions
-            fig.add_annotation(x=0.01, xref="paper", y=math.log10(thr) if log_cb.value else thr,
-                               yref="y", text="threshold " + fmt_thr(thr), showarrow=False,
-                               xanchor="left", yanchor="bottom", font_color="#27ae60")
-        fig.add_vrect(x0=cut, x1=data["n_cycles"], fillcolor="#888", opacity=0.08, line_width=0)
-        fig.add_vline(x=cut, line_dash="dash", line_color="#c0392b", line_width=2,
-                      annotation_text=("Ct max %g" if is_ref(gene) else "Ct cutoff %g") % cut,
-                      annotation_position="top right", annotation_font_color="#c0392b")
-        fig.update_layout(title="<b>%s</b> — %s" % (gene, run), template="plotly_white",
-                          height=480, margin=dict(l=60, r=20, t=60, b=50),
+        add_curves(fig, data, w, run, gene, CT_CUTOFF, log_cb.value, legend=True)
+        add_lines(fig, data, log_cb.value)
+        fig.update_layout(title="<b>%s</b>%s — %s" % (gene, " (reference gene)" if is_ref else "", run),
+                          template="plotly_white", height=480, margin=dict(l=60, r=20, t=60, b=50),
                           xaxis_title="Cycle", yaxis_title="ΔRn",
                           legend=dict(orientation="h", y=-0.18, x=0))
 
+        within = lambda d: d[d["ct"] <= CT_CUTOFF]
         samples = w[w["role"] == "sample"]
-        n_det = (samples["ct"] <= cut).sum()
-        ntc = w[w["role"] == "ntc"]
-        ntc_hit = ntc[ntc["ct"] <= cut]
-        pc = w[w["role"] == "positive"]
-        pc_hit = pc[pc["ct"] <= cut]
-        msgs = ["<b>%d of %d</b> sample wells cross the threshold by Ct %g." % (n_det, len(samples), cut)]
+        ntc, pc = w[w["role"] == "ntc"], w[w["role"] == "positive"]
+        word = "have a reference Ct ≤ %g (DNA OK)" if is_ref else "are methylated (Ct ≤ %g)"
+        msgs = ["<b>%d of %d</b> sample wells %s." % (len(within(samples)), len(samples), word % CT_CUTOFF)]
         if len(ntc):
+            hit = within(ntc)
             msgs.append("<span style='color:#c0392b'>⚠ No-template control amplified: %s</span>"
-                        % ", ".join("%s (Ct %.1f)" % (s, c) for s, c in zip(ntc_hit["sample"], ntc_hit["ct"]))
-                        if len(ntc_hit) else "<span style='color:#2e8b57'>✔ No-template controls stay negative.</span>")
+                        % ", ".join("%s (Ct %.1f)" % (s, c) for s, c in zip(hit["sample"], hit["ct"]))
+                        if len(hit) else "<span style='color:#2e8b57'>✔ No-template controls stay negative.</span>")
         if len(pc):
-            msgs.append("<span style='color:#2e8b57'>✔ Positive controls amplify.</span>" if len(pc_hit)
-                        else "<span style='color:#c0392b'>⚠ No positive control crosses before the cutoff.</span>")
+            msgs.append("<span style='color:#2e8b57'>✔ Positive controls amplify.</span>" if len(within(pc))
+                        else "<span style='color:#c0392b'>⚠ No positive control reaches the threshold by Ct %g.</span>" % CT_CUTOFF)
         info.value = "<br>".join(msgs)
 
         role_name = {"sample": "Sample", "positive": "Positive control", "ntc": "No-template control"}
         tab = pd.DataFrame({
             "Sample": w["sample"], "Well": w["well"], "Type": w["role"].map(role_name),
-            "Ct": w["ct"].round(2)})
-        if own is not None:
-            tab.insert(3, "Instrument Ct", w["instrument_ct"].round(2))
-        tab["Result"] = ["crosses before cutoff" if pd.notna(c) and c <= cut else
-                         ("after cutoff" if pd.notna(c) else "undetermined") for c in w["ct"]]
+            "Ct at ΔRn %s" % fmt_thr(THRESHOLD): w["ct"].round(2),
+            "Instrument Ct": w["instrument_ct"].where(w["instrument_ct"] < data["n_cycles"]).round(2)})
+        tab["Result"] = [("Ct ≤ %g" % CT_CUTOFF) if pd.notna(c) and c <= CT_CUTOFF else
+                         ("Ct above %g" % CT_CUTOFF if pd.notna(c) else "does not reach the threshold")
+                         for c in w["ct"]]
         tab["Type"] = pd.Categorical(tab["Type"], list(role_name.values()))
-        tab = tab.sort_values(["Type", "Ct"], na_position="last")
-
-        rows = ["<tr><td>%s</td><td>%s</td><td>%s</td></tr>" % (
-                    g, "instrument" if g not in settings["threshold"] else fmt_thr(settings["threshold"][g]),
-                    "%g" % settings["ct_cutoff"].get(g, DEFAULT_CT_CUTOFF))
-                for g in dict.fromkeys(wells["target"]) if not is_ref(g)]
-        chosen.value = ("<b>Settings for step ④</b><table style='border-collapse:collapse'>"
-                        "<tr><th style='text-align:left;padding-right:18px'>Gene</th>"
-                        "<th style='text-align:left;padding-right:18px'>Threshold</th>"
-                        "<th style='text-align:left'>Ct cutoff</th></tr>%s</table>" % "".join(rows))
+        tab = tab.sort_values(["Type", tab.columns[3]], na_position="last")
         with out:
             out.clear_output(wait=True)
             fig.show()
@@ -359,63 +314,27 @@ def _explorer(data, settings):
         gene_dd.options = genes
         gene_dd.value = keep
         busy["on"] = False
-        sync_sliders()
-        draw()
-
-    def on_gene(change):
-        if busy["on"]:
-            return
-        sync_sliders()
-        draw()
-
-    def on_thr(change):
-        if busy["on"]:
-            return
-        settings["threshold"][gene_dd.value] = float("%.4g" % thr_sl.value)
-        draw()
-
-    def on_cut(change):
-        if busy["on"] or is_ref(gene_dd.value):
-            return
-        settings["ct_cutoff"][gene_dd.value] = float(cut_sl.value)
-        draw()
-
-    def on_reset(_):
-        settings["threshold"].pop(gene_dd.value, None)
-        sync_sliders()
         draw()
 
     run_dd.observe(on_run, "value")
-    gene_dd.observe(on_gene, "value")
-    thr_sl.observe(on_thr, "value")
-    cut_sl.observe(on_cut, "value")
+    gene_dd.observe(draw, "value")
     log_cb.observe(draw, "value")
-    reset.on_click(on_reset)
-
-    sync_sliders()
     draw()
-    ui = W.VBox([run_dd, W.HBox([gene_dd, log_cb]),
-                 W.HBox([thr_sl, reset]), thr_note, cut_sl, info, out, chosen])
-    return ui, draw
+    return W.VBox([run_dd, W.HBox([gene_dd, log_cb]), info, out]), draw
 
-_ui, _draw = _explorer(DATA, SETTINGS)
+_ui, _draw = _viewer(DATA)
 display(_ui)
 '''
 
 ANALYSE = r'''
-#@title ④ Settings and report { display-mode: "form" }
-#@markdown Change the settings if you need to, then click ▶. The report and charts appear below, and the report and Excel file download.
-#@markdown The **threshold and Ct cutoff** of each gene come from step ③ (defaults: instrument threshold, Ct 40).
-
-#@markdown ### When is a gene methylated?
-beta_cutoff = 0  #@param {type:"slider", min:0, max:1, step:0.01}
-#@markdown *Beta = methylation level from 0 (none) to 1 (as methylated as the positive control). Keep it at 0 to count any detected methylation.*
-
-#@markdown Different beta cutoffs for some genes (optional), e.g. `TAC1=0.05, HOXA7=0.01`:
-beta_cutoff_per_gene = ""  #@param {type:"string"}
+#@title ④ Report { display-mode: "form" }
+#@markdown Click ▶. The report and a Ct chart appear below, and the report and Excel file download.
+#@markdown
+#@markdown **Rule (fixed):** the Ct is read at ΔRn **10,000**; a gene is **methylated** when its Ct is **40 or less**.
+#@markdown Every sample is called **Potential cancer**, **Not determined** (repeat) or **Low risk**.
 
 #@markdown ### Cancer risk decision
-#@markdown A sample is **Potentially cancer** when at least this many genes are methylated:
+#@markdown A sample is **Potential cancer** when at least this many genes are methylated:
 min_methylated_genes = 1  #@param {type:"integer"}
 #@markdown Genes that count (comma separated; empty = all except the reference gene):
 panel_genes = ""  #@param {type:"string"}
@@ -424,12 +343,8 @@ panel_genes = ""  #@param {type:"string"}
 reference_gene = "B ACTIN"  #@param {type:"string"}
 no_template_controls = ""  #@param {type:"string"}
 positive_controls = ""  #@param {type:"string"}
-
-#@markdown ### Advanced quality settings
-reference_ct_max = 40  #@param {type:"number"}
+#@markdown Warn "low DNA input" when the reference gene Ct is above:
 reference_ct_low_input = 35  #@param {type:"number"}
-min_cq_confidence = 0.5  #@param {type:"number"}
-min_curve_height = 0.2  #@param {type:"number"}
 
 #@markdown ---
 show_r_code = False  #@param {type:"boolean"}
@@ -440,7 +355,6 @@ from IPython.display import display, HTML
 
 if "run_r" not in globals():
     raise SystemExit("Run step ① first.")
-SETTINGS = globals().get("SETTINGS") or {"ct_cutoff": {}, "threshold": {}}
 
 def _names(text):
     return [t.strip() for t in text.split(",") if t.strip()]
@@ -448,32 +362,14 @@ def _names(text):
 def _exact_regex(names):
     return "^(" + "|".join(re.escape(n) for n in names) + ")$"
 
-def _gene_vector(default, values):
-    parts = [] if default is None else ["%s" % default]
-    parts += ["`%s` = %r" % (g.replace("`", ""), float(v)) for g, v in values.items()]
-    return "c(" + ", ".join(parts) + ")"
-
-def _per_gene_text(text):
-    values = {}
-    for item in _names(text):
-        if "=" not in item:
-            raise SystemExit("Per-gene cutoffs must look like GENE=value, got: " + item)
-        gene, value = item.rsplit("=", 1)
-        values[gene.strip()] = float(value)
-    return values
-
 def build_r_code(eds_dir, out_dir):
     ref = reference_gene.strip()
-    cuts = {g: v for g, v in SETTINGS["ct_cutoff"].items() if v != DEFAULT_CT_CUTOFF}
     args = {
         "reference": r_str(_exact_regex([ref])) if ref else "NULL",
-        "ct_cutoff": _gene_vector(DEFAULT_CT_CUTOFF, cuts) if cuts else "%g" % DEFAULT_CT_CUTOFF,
-        "threshold": _gene_vector(None, SETTINGS["threshold"]) if SETTINGS["threshold"] else "NULL",
-        "beta_cutoff": _gene_vector(beta_cutoff, _per_gene_text(beta_cutoff_per_gene)),
-        "ref_ct_max": reference_ct_max,
+        "threshold": "%g" % THRESHOLD,
+        "ct_cutoff": "%g" % CT_CUTOFF,
+        "ref_ct_max": "%g" % CT_CUTOFF,
         "ref_ct_warn": reference_ct_low_input,
-        "min_cq_conf": min_cq_confidence,
-        "min_plateau": min_curve_height,
         "min_methylated_genes": int(min_methylated_genes),
         "panel": "c(%s)" % ", ".join(r_str(g) for g in _names(panel_genes)) if _names(panel_genes) else "NULL",
     }
@@ -504,14 +400,12 @@ def run_analysis(eds_dir=EDS_DIR, out_dir=OUT_DIR):
     run_r(code, os.path.join(out_dir, "analysis_script.R"))
     return code
 
-def beta_figure(results):
+def ct_figure(results):
     r = results[results["role"] == "sample"].copy()
     genes = list(dict.fromkeys(r["target"]))
-    pos = r["beta"][r["beta"] > 0]
-    low = math.floor(math.log10(pos.min())) - 1 if len(pos) else -4
-    floor = 10 ** low
-    colors = {"Methylated": "#c0392b", "Unmethylated": "#7fa7c9",
-              "Review": "#f0b429", "Invalid": "#9e9e9e"}
+    top = max(46.0, math.ceil(r["ct"].max() + 1) if r["ct"].notna().any() else 46.0)
+    no_ct = top + 2  # row for genes whose curve never reached the threshold
+    colors = {"Methylated": "#c0392b", "Unmethylated": "#7fa7c9", "Not determined": "#f0b429"}
     fig = go.Figure()
     for call, color in colors.items():
         d = r[r["call"] == call]
@@ -519,22 +413,21 @@ def beta_figure(results):
             continue
         x = [genes.index(g) + (zlib.crc32(s.encode()) % 1000 / 1000 - 0.5) * 0.5
              for g, s in zip(d["target"], d["sample"] + d["run"])]
-        y = d["beta"].fillna(0).clip(lower=floor)
-        text = ["<b>%s</b><br>%s<br>beta %s<br>%s" % (s, g, "–" if pd.isna(b) else "%.3g" % b, rn)
-                for s, g, b, rn in zip(d["sample"], d["target"], d["beta"], d["run"])]
-        fig.add_trace(go.Scatter(x=x, y=y, mode="markers", name=call, text=text,
+        text = ["<b>%s</b><br>%s<br>%s<br>%s" % (s, g, "no Ct" if pd.isna(c) else "Ct %.2f" % c, rn)
+                for s, g, c, rn in zip(d["sample"], d["target"], d["ct"], d["run"])]
+        fig.add_trace(go.Scatter(x=x, y=d["ct"].fillna(no_ct), mode="markers", name=call, text=text,
                                  hovertemplate="%{text}<extra></extra>",
                                  marker=dict(color=color, size=10, line=dict(color="white", width=1))))
-    for i, g in enumerate(genes):
-        cut = r.loc[r["target"] == g, "beta_cutoff"].dropna()
-        if len(cut) and cut.iloc[0] > 0:
-            fig.add_shape(type="line", x0=i - 0.4, x1=i + 0.4, y0=cut.iloc[0], y1=cut.iloc[0],
-                          line=dict(color="#c0392b", dash="dash", width=2))
-    ticks = [10 ** k for k in range(low + 1, 1)]
-    fig.update_yaxes(type="log", range=[low - 0.2, 0.15], title="beta (methylation level)",
-                     tickvals=[floor] + ticks, ticktext=["0"] + ["%g" % t for t in ticks])
+    fig.add_hrect(y0=CT_CUTOFF, y1=no_ct + 1.5, fillcolor="#888", opacity=0.08, line_width=0)
+    fig.add_hline(y=CT_CUTOFF, line_dash="dash", line_color="#c0392b", line_width=2,
+                  annotation_text="Ct %g: methylated below this line" % CT_CUTOFF,
+                  annotation_position="bottom right", annotation_font_color="#c0392b")
+    ticks = list(range(15, int(top) + 1, 5))
+    fig.update_yaxes(range=[no_ct + 1.5, min(15, (r["ct"].min() - 2) if r["ct"].notna().any() else 15)],
+                     title="Ct at ΔRn %s" % fmt_thr(THRESHOLD),
+                     tickvals=ticks + [no_ct], ticktext=[str(t) for t in ticks] + ["no Ct"])
     fig.update_xaxes(tickvals=list(range(len(genes))), ticktext=genes, range=[-0.6, len(genes) - 0.4])
-    fig.update_layout(title="<b>Methylation level per gene</b> (red dashes: beta cutoff)",
+    fig.update_layout(title="<b>Ct per gene</b> (each dot is a sample)",
                       template="plotly_white", height=460, legend_title_text="Call",
                       margin=dict(l=60, r=20, t=60, b=40))
     return fig
@@ -542,10 +435,10 @@ def beta_figure(results):
 _code = run_analysis()
 if show_r_code:
     print(_code)
-_res = read_csv(os.path.join(OUT_DIR, "results.csv"), ["beta", "beta_cutoff", "ct", "pmr"])
+_res = read_csv(os.path.join(OUT_DIR, "results.csv"), ["ct"])
 with open(os.path.join(OUT_DIR, "qmsp_report.html")) as f:
     display(HTML(f.read()))
-beta_figure(_res).show()
+ct_figure(_res).show()
 if download_files:
     from google.colab import files
     files.download(os.path.join(OUT_DIR, "qmsp_report.html"))
@@ -557,8 +450,10 @@ INTRO = """
 
 1. Click ▶ on **step ①** to install the tool. You only need to do this once per session.
 2. Click ▶ on **step ②** and choose your QuantStudio `.eds` files. The amplification curves are drawn.
-3. Click ▶ on **step ③** to look at each gene: move the **threshold** and **Ct cutoff** sliders and watch the lines move on the graph.
-4. Adjust the other settings in **step ④** if you need to, then click ▶. The report and a methylation chart appear, and the report (HTML) and the Excel file download.
+3. Click ▶ on **step ③** to look at one gene at a time, with a table of every well.
+4. Click ▶ on **step ④**. The report and a Ct chart appear, and the report (HTML) and the Excel file download.
+
+**The rule:** the Ct is read where the amplification curve crosses **ΔRn = 10,000**. A gene is **methylated** when its **Ct is 40 or less**. Each sample is then called **Potential cancer** (at least one methylated gene), **Not determined** (the result could not be trusted, e.g. the reference gene or a control failed; repeat the sample) or **Low risk**.
 
 To change a setting, edit it and click ▶ on the step again. To see the code behind a step, double-click the step.
 

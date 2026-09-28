@@ -2,7 +2,7 @@
 % Please edit documentation in R/report.R
 \name{risk_report}
 \alias{risk_report}
-\title{Per-sample verdict: potentially cancer, inconclusive or not risky}
+\title{Per-sample verdict: potential cancer, not determined or low risk}
 \usage{
 risk_report(x, min_methylated_genes = 1, panel = NULL)
 }
@@ -10,7 +10,7 @@ risk_report(x, min_methylated_genes = 1, panel = NULL)
 \item{x}{A `qmsp_result` from [analyze_qmsp()].}
 
 \item{min_methylated_genes}{Number of methylated genes needed for
-`Potentially cancer`.}
+`Potential cancer`.}
 
 \item{panel}{Genes that count (default: all genes except the reference).}
 }
@@ -18,14 +18,16 @@ risk_report(x, min_methylated_genes = 1, panel = NULL)
 A data frame with one row per run and sample.
 }
 \description{
-Counts, for every sample, how many genes of the panel are methylated.
+Counts, for every sample, how many genes of the panel are methylated
+(Ct at or below 40 at a delta Rn threshold of 10,000).
 \itemize{
-  \item `Potentially cancer`: at least `min_methylated_genes` genes are
+  \item `Potential cancer`: at least `min_methylated_genes` genes are
     methylated.
-  \item `Inconclusive`: fewer are methylated, but enough genes need review or
-    are invalid that the verdict could change. Repeat the sample.
-  \item `Not risky`: fewer than `min_methylated_genes` genes are methylated,
-    even counting the ones that need review.
+  \item `Not determined`: fewer are methylated, but genes that could not be
+    determined (failed reference gene, failed controls, replicates that
+    disagree) could change that. Repeat the sample.
+  \item `Low risk`: fewer than `min_methylated_genes` genes are methylated,
+    even counting the ones that could not be determined.
 }
 This is a research tool, not a diagnosis.
 }

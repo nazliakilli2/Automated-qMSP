@@ -1,10 +1,13 @@
 # autoqmsp: automated qMSP analysis
 
 Upload QuantStudio / Applied Biosystems run files (`.eds`) and get a report
-that says, for every sample, whether it is **Potentially cancer**,
-**Inconclusive** (repeat) or **Not risky**, together with a methylation level
-(**beta**, 0–1) for every gene. You don't need to export anything manually or
-work in Excel.
+that says, for every sample, whether it is **Potential cancer**,
+**Not determined** (repeat) or **Low risk**. You don't need to export
+anything manually or work in Excel.
+
+**The rule:** the Ct is read where the amplification curve crosses
+**ΔRn = 10,000**, and a gene is **methylated** when its **Ct is 40 or less**.
+These two values are fixed for the whole lab.
 
 > For research use only. The results are not a diagnosis.
 
@@ -17,20 +20,15 @@ stays hidden:
 
 1. **Install**: click ▶ and wait for *Ready*.
 2. **Upload**: click ▶, then *Choose Files* and pick your `.eds` files. The
-   amplification curves of every run and gene are drawn, with the
-   instrument's threshold. Hover over a curve to see the sample and its Ct.
-3. **Adjust on the curves**: pick a run and gene and move the sliders.
-   - **Threshold** (green horizontal line): where Ct is read. Moving it
-     recomputes the Ct of every well of that gene.
-   - **Ct cutoff** (red vertical line): wells that cross later count as not
-     methylated.
-
-   The curves change colour, and a table and check messages update (for
-   example "⚠ No-template control amplified"). Your choices are used in step 4.
-4. **Settings and report**: adjust the beta cutoff and the other settings,
-   then click ▶. The report and a chart of the methylation level (beta) per
-   gene appear in the notebook, and the report (HTML) and Excel file
-   download.
+   amplification curves of every run and gene are drawn, with the threshold
+   (green, ΔRn 10,000) and the Ct cutoff (red, 40). Curves of samples that
+   cross the threshold by Ct 40 are red. Hover over a curve to see the sample
+   and its Ct.
+3. **Look at each gene**: pick a run and gene to see its curves, a table of
+   every well's Ct, and control checks (for example "⚠ No-template control
+   amplified").
+4. **Report**: click ▶. The report and a chart of the Ct per gene appear in
+   the notebook, and the report (HTML) and Excel file download.
 
 To see the code behind a step, double-click the step. Tick *show_r_code* to
 print the R code of the analysis.
@@ -46,8 +44,8 @@ autoqmsp::run_app()
 | Tab | What you do |
 |---|---|
 | **1. Upload** | Choose the `.eds` files. The runs, samples and genes found are listed. |
-| **2. Settings** | Ct and beta cutoffs (also per gene), how many methylated genes make a sample *Potentially cancer*, which genes count, the reference gene, and the control samples (detected automatically, editable). Advanced quality settings are hidden behind a checkbox. |
-| **3. Report** | The verdict for every sample, beta values, control checks and wells to check. Download the report (HTML, printable to PDF) or Excel. The R code is shown only if you tick *Show the R code*. |
+| **2. Settings** | Shows the fixed rule (ΔRn 10,000, Ct ≤ 40). You choose how many methylated genes make a sample *Potential cancer*, which genes count, the reference gene, and the control samples (detected automatically, editable). |
+| **3. Report** | The verdict for every sample, the Ct of every gene, and the control checks. Download the report (HTML, printable to PDF) or Excel. The R code is shown only if you tick *Show the R code*. |
 | **4. Details** | Heatmap, all results, amplification curves, plate layout. |
 
 To give the whole lab one link, deploy the `inst/shiny` folder to
@@ -56,77 +54,55 @@ To give the whole lab one link, deploy the `inst/shiny` folder to
 
 ## How the results are calculated
 
-**1. Quality control of each well.** An amplified well is sent to *Review*
-instead of being trusted when:
+**1. Ct.** For every well, the Ct is read from its amplification curve at
+**ΔRn = 10,000** (all genes, including the reference gene). The Ct is the
+cycle where the curve crosses 10,000 for the last time and stays above it,
+interpolated between cycles. A curve that never reaches 10,000 has no Ct. The
+instrument's own Ct is kept in the Excel file for comparison.
 
-- the instrument's Cq confidence is low, or
-- the instrument says there was no amplification or it was inconclusive, or
-- its curve is much lower than the positive control's (a flat "drift" curve
-  rather than a real amplification).
+**2. Methylated or not.** A gene is **methylated** when its Ct is **40 or
+less**. Otherwise it is unmethylated, unless the result cannot be trusted,
+in which case it is **not determined**:
 
-**2. Controls.** For each run and gene:
+- the sample's reference gene (e.g. β-actin) has no Ct of 40 or less (DNA
+  failed), or
+- the gene's no-template (water) control amplified, for a methylated result,
+  or
+- the gene's positive control did not amplify, for an unmethylated result,
+  or
+- fewer than half of the replicates agree.
 
-- No-template (water) controls must stay negative.
-- Positive controls must amplify.
-- The reference gene (e.g. β-actin) must amplify in every sample. A failure
-  makes the sample *Invalid*; a high Ct flags *low DNA input*.
-
-**3. Methylation level (beta, 0–1).**
-
-- beta = PMR / 100, capped at 1.
-- PMR (percentage of methylated reference) = 100 × 2^-ΔCt(sample) /
-  2^-ΔCt(positive control), where ΔCt = Ct(gene) − Ct(reference gene).
-- 0 means no methylation detected. 1 means as methylated as the fully
-  methylated positive control.
-- In runs without a reference gene, beta = 2^-(Ct(sample) − Ct(positive control)).
-
-**Threshold.** By default the Ct values of the instrument software are used.
-If you set your own fluorescence threshold for a gene, its Ct is recomputed
-from the amplification curve: the cycle where the curve crosses the threshold
-for the last time and stays above it. With the instrument's own threshold, the
-recomputed Ct is within about 0.05 cycles of the instrument's.
-
-**4. Methylated or not.** A gene is **Methylated** when all of these hold:
-
-- Ct ≤ the Ct cutoff
-- the wells pass QC
-- beta ≥ the beta cutoff
-
-You can set both cutoffs per gene.
-
-**5. Verdict per sample.**
+**3. Verdict per sample.**
 
 | Verdict | Rule |
 |---|---|
-| **Potentially cancer** | at least *N* of the panel genes are methylated (default *N* = 1) |
-| **Inconclusive** | fewer than *N*, but genes that need review or failed could change that; repeat the sample |
-| **Not risky** | fewer than *N* genes methylated, even counting the uncertain ones |
+| **Potential cancer** | at least *N* genes of the panel are methylated (default *N* = 1) |
+| **Not determined** | fewer than *N*, but genes that could not be determined could change that; repeat the sample |
+| **Low risk** | fewer than *N* genes methylated, even counting the ones not determined |
 
-### Default settings (all adjustable)
+ΔCt, PMR and beta are still calculated and listed in the Excel file for
+information. They do not change the result.
 
-| Setting | Default |
+### Settings
+
+| Setting | Value |
 |---|---|
-| Fluorescence threshold | the instrument's |
-| Ct cutoff | 40 |
-| Beta cutoff | 0 (any detected methylation counts) |
-| Methylated genes for *Potentially cancer* | 1 |
-| Reference gene invalid / low-input Ct | > 40 / > 35 |
-| Minimum Cq confidence | 0.5 |
-| Minimum curve height | 20 % of positive control |
+| Threshold (ΔRn) | 10,000 (fixed) |
+| Ct cutoff | 40 (fixed) |
+| Reference gene Ct max / low-input warning | 40 / 35 |
+| Methylated genes for *Potential cancer* | 1 |
 
 ## Option C: R code
 
 ```r
 library(autoqmsp)
 runs <- read_eds_files("folder/with/eds/files")
-res  <- analyze_qmsp(runs, reference = "B ACTIN", ct_cutoff = c(40, TAC1 = 38),
-                     threshold = c(TAC1 = 3000), beta_cutoff = 0.05,
-                     min_methylated_genes = 2)
+res  <- analyze_qmsp(runs, reference = "B ACTIN")   # ΔRn 10,000, Ct <= 40
 res$report                           # verdict per sample
-res$results                          # Ct, ΔCt, PMR, beta, call per gene
+res$results                          # Ct and call per gene
 write_report(res, "qmsp_report.html")
 export_results(res, "qmsp_results.xlsx")
-plot_methylation(res, "beta")
+plot_methylation(res)
 plot_amplification(res, run = "my run")
 ```
 

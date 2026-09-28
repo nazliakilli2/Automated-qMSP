@@ -16,7 +16,8 @@ analyze_qmsp(
   min_cq_conf = 0.5,
   min_plateau = 0.2,
   min_methylated_genes = 1,
-  panel = NULL
+  panel = NULL,
+  threshold = NULL
 )
 }
 \arguments{
@@ -54,6 +55,13 @@ fraction of the positive controls' (same gene and run) are sent to review.}
 
 \item{panel}{Genes that count for the verdict (default: all genes except the
 reference).}
+
+\item{threshold}{Fluorescence (delta Rn) threshold per gene. `NULL` (the
+default) keeps the Ct values of the instrument software. A number, or a
+named vector such as `c(TAC1 = 0.2)`, recomputes the Ct of those genes as
+the cycle where the amplification curve crosses the threshold and stays
+above it (log-linear interpolation; undetermined if it ends below). Genes
+without a value keep the instrument Ct.}
 }
 \value{
 A `qmsp_result` list with `report` (one verdict per run and

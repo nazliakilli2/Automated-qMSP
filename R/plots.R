@@ -5,11 +5,16 @@
 #' @param targets Genes to show (default: all).
 #' @param samples Samples to show (default: all).
 #' @param log Use a log10 delta Rn axis.
-#' @param threshold Draw the instrument threshold for each gene.
+#' @param threshold Draw the fluorescence threshold of each gene (dotted
+#'   line): the one used by [analyze_qmsp()], else the instrument's.
+#' @param ct_cutoff Draw the Ct cutoff of each gene (dashed vertical line).
+#'   `TRUE` uses the cutoff of a `qmsp_result`; a number or named per-gene
+#'   vector (as in [analyze_qmsp()]) draws that value; `FALSE` draws none.
 #' @return A ggplot object, one panel per gene.
 #' @export
 plot_amplification <- function(x, run = NULL, targets = NULL, samples = NULL,
-                               log = FALSE, threshold = TRUE) {
+                               log = FALSE, threshold = TRUE,
+                               ct_cutoff = TRUE) {
   run <- run %||% unique(x$wells$run)[1]
   w <- x$wells[x$wells$run %in% run, ]
   if (!is.null(targets)) w <- w[w$target %in% targets, ]
@@ -45,6 +50,21 @@ plot_amplification <- function(x, run = NULL, targets = NULL, samples = NULL,
       p <- p + ggplot2::geom_hline(data = th,
                                    ggplot2::aes(yintercept = .data$threshold),
                                    linetype = "dotted", colour = "grey30")
+    }
+  }
+  cutoff <- if (isTRUE(ct_cutoff)) x$settings$ct_cutoff else
+    if (is.numeric(ct_cutoff)) ct_cutoff
+  if (!is.null(cutoff)) {
+    genes <- unique(cv$target)
+    cut_df <- data.frame(target = genes, ct = gene_value(cutoff, genes))
+    if (!is.null(x$wells$is_reference)) {
+      ref <- unique(x$wells$target[x$wells$is_reference])
+      cut_df <- cut_df[!cut_df$target %in% ref, , drop = FALSE]
+    }
+    if (nrow(cut_df)) {
+      p <- p + ggplot2::geom_vline(data = cut_df,
+                                   ggplot2::aes(xintercept = .data$ct),
+                                   linetype = "dashed", colour = "#c0392b")
     }
   }
   if (log) p <- p + ggplot2::scale_y_log10()

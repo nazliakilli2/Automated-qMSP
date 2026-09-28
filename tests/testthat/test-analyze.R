@@ -78,3 +78,29 @@ test_that("wide table, export and plots work", {
   expect_s3_class(plot_plate(r, fill = "result"), "ggplot")
   expect_output(print(r), "qmsp_result")
 })
+
+test_that("Ct is recomputed from the curves at a user threshold", {
+  expect_equal(ct_at_threshold(1:5, c(0, 1, 10, 100, 1000), 10), 3)
+  expect_equal(ct_at_threshold(1:5, c(0, 1, 10, 100, 1000), 31.6227766), 3.5,
+               tolerance = 1e-6)
+  expect_true(is.na(ct_at_threshold(1:5, c(0, 1, 10, 100, 50), 80)))
+  # an early noise spike is ignored: the last crossing counts
+  expect_equal(ct_at_threshold(1:6, c(0, 20, 1, 10, 100, 1000), 10), 4)
+
+  thr_exact <- 30000 / (1 + exp(2 / 1.2))  # the fixture curves reach it at Ct
+  r <- res(threshold = c(GENE1 = thr_exact))
+  w <- r$wells
+  s1 <- w$sample == "S1" & w$target == "GENE1"
+  expect_equal(w$ct[s1], 30, tolerance = 0.2)
+  expect_equal(w$ct_instrument[s1], 30)
+  ref <- w$target == "B ACTIN" & w$sample == "S1"
+  expect_equal(w$ct[ref], w$ct_instrument[ref])  # other genes untouched
+  expect_equal(r$thresholds$source[r$thresholds$target == "GENE1"], "user")
+  expect_equal(r$thresholds$threshold[r$thresholds$target == "GENE1"], thr_exact)
+
+  high <- res(threshold = c(GENE1 = 1e6))
+  expect_true(all(is.na(high$wells$ct[high$wells$target == "GENE1"])))
+  expect_equal(call_of(high, "S1")[1], "Unmethylated")
+
+  expect_s3_class(plot_amplification(r, ct_cutoff = c(38, GENE1 = 35)), "ggplot")
+})

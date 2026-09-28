@@ -10,7 +10,8 @@ plot_amplification(
   targets = NULL,
   samples = NULL,
   log = FALSE,
-  threshold = TRUE
+  threshold = TRUE,
+  ct_cutoff = TRUE
 )
 }
 \arguments{
@@ -24,7 +25,12 @@ plot_amplification(
 
 \item{log}{Use a log10 delta Rn axis.}
 
-\item{threshold}{Draw the instrument threshold for each gene.}
+\item{threshold}{Draw the fluorescence threshold of each gene (dotted
+line): the one used by [analyze_qmsp()], else the instrument's.}
+
+\item{ct_cutoff}{Draw the Ct cutoff of each gene (dashed vertical line).
+`TRUE` uses the cutoff of a `qmsp_result`; a number or named per-gene
+vector (as in [analyze_qmsp()]) draws that value; `FALSE` draws none.}
 }
 \value{
 A ggplot object, one panel per gene.

@@ -2,7 +2,8 @@
 #'
 #' Writes one sheet per table: the verdict per sample, wide tables of calls,
 #' beta values and PMR, the full per-gene
-#' results, the control checks, every well, and the settings used. If the
+#' results, the control checks, the fluorescence thresholds, every well, and
+#' the settings used. If the
 #' `writexl` package is not installed, CSV files are written instead.
 #'
 #' @param x A `qmsp_result` from [analyze_qmsp()].
@@ -23,6 +24,7 @@ export_results <- function(x, path = "qmsp_results.xlsx") {
     PMR = results_wide(x, "pmr"),
     Results = within_results(x$results),
     Controls = x$controls,
+    Thresholds = x$thresholds,
     Wells = wells[, setdiff(names(wells), c("row", "col"))],
     Settings = data.frame(
       setting = names(x$settings),

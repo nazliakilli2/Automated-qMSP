@@ -56,6 +56,12 @@
 #'   are sent to review.
 #' @param min_plateau Amplified wells whose final delta Rn is below this
 #'   fraction of the positive controls' (same gene and run) are sent to review.
+#' @param threshold Fluorescence (delta Rn) threshold per gene. `NULL` (the
+#'   default) keeps the Ct values of the instrument software. A number, or a
+#'   named vector such as `c(TAC1 = 0.2)`, recomputes the Ct of those genes as
+#'   the cycle where the amplification curve crosses the threshold and stays
+#'   above it (log-linear interpolation; undetermined if it ends below). Genes
+#'   without a value keep the instrument Ct.
 #' @param min_methylated_genes Number of methylated panel genes needed for a
 #'   `Potentially cancer` verdict.
 #' @param panel Genes that count for the verdict (default: all genes except the
@@ -77,7 +83,8 @@ analyze_qmsp <- function(x,
                          min_cq_conf = 0.5,
                          min_plateau = 0.2,
                          min_methylated_genes = 1,
-                         panel = NULL) {
+                         panel = NULL,
+                         threshold = NULL) {
   if (!inherits(x, "qmsp_run")) {
     stop("`x` must come from read_eds() or read_eds_files().", call. = FALSE)
   }
@@ -85,15 +92,18 @@ analyze_qmsp <- function(x,
                    ct_cutoff = ct_cutoff, beta_cutoff = beta_cutoff,
                    ref_ct_max = ref_ct_max, ref_ct_warn = ref_ct_warn,
                    min_cq_conf = min_cq_conf, min_plateau = min_plateau,
-                   min_methylated_genes = min_methylated_genes, panel = panel)
+                   min_methylated_genes = min_methylated_genes, panel = panel,
+                   threshold = threshold)
 
-  wells <- classify_wells(x$wells, x$curves, settings)
+  wells <- apply_thresholds(x$wells, x$curves, threshold)
+  wells <- classify_wells(wells, x$curves, settings)
   controls <- control_status(wells)
   results <- sample_results(wells, controls, settings)
 
   thresholds <- x$thresholds
   thresholds <- thresholds[!grepl("DEFAULT_SETTINGS", thresholds$target), ,
                            drop = FALSE]
+  thresholds <- used_thresholds(thresholds, wells, threshold)
 
   out <- structure(
     list(report = NULL, results = results, controls = controls, wells = wells,
@@ -136,6 +146,74 @@ print.qmsp_result <- function(x, ...) {
 
 call_levels <- function() {
   c("Methylated", "Unmethylated", "Review", "Invalid")
+}
+
+# ---- step 0: own fluorescence thresholds ------------------------------------
+
+# Per-gene threshold lookup; genes without a value get NA (= instrument Ct).
+threshold_value <- function(threshold, genes) {
+  if (is.null(threshold) || !length(threshold)) {
+    return(rep(NA_real_, length(genes)))
+  }
+  nm <- names(threshold)
+  if (!is.null(nm) && all(nzchar(nm))) threshold <- c(NA_real_, threshold)
+  as.numeric(gene_value(threshold, genes))
+}
+
+# Cycle where a delta Rn curve crosses `thr` for the last time from below
+# (so early noise spikes are ignored), interpolated on the log scale.
+# NA when the curve ends below the threshold.
+ct_at_threshold <- function(cycle, delta_rn, thr) {
+  o <- order(cycle)
+  cycle <- cycle[o]
+  d <- delta_rn[o]
+  n <- length(d)
+  if (!n || is.na(thr) || is.na(d[n]) || d[n] < thr) return(NA_real_)
+  below <- which(is.na(d) | d < thr)
+  if (!length(below)) return(cycle[1])
+  j <- max(below)
+  if (is.na(d[j])) return(cycle[j + 1])
+  step <- cycle[j + 1] - cycle[j]
+  frac <- if (d[j] > 0) (log(thr) - log(d[j])) / (log(d[j + 1]) - log(d[j]))
+    else (thr - d[j]) / (d[j + 1] - d[j])
+  cycle[j] + step * frac
+}
+
+# Recompute Ct for genes that have their own threshold; keep the instrument's
+# value in `ct_instrument`.
+apply_thresholds <- function(wells, curves, threshold) {
+  wells$ct_instrument <- wells$ct
+  wells$threshold <- threshold_value(threshold, wells$target)
+  todo <- which(!is.na(wells$threshold))
+  if (!length(todo) || is.null(curves) || !nrow(curves)) return(wells)
+  curve_key <- paste(curves$run, curves$well_index, curves$target, sep = "\r")
+  by_well <- split(seq_len(nrow(curves)), curve_key)
+  well_key <- paste(wells$run, wells$well_index, wells$target, sep = "\r")
+  for (i in todo) {
+    rows <- by_well[[well_key[i]]]
+    if (is.null(rows)) next
+    wells$ct[i] <- ct_at_threshold(curves$cycle[rows], curves$delta_rn[rows],
+                                   wells$threshold[i])
+  }
+  wells
+}
+
+# Threshold table per run and gene: the instrument's and the one used.
+used_thresholds <- function(thresholds, wells, threshold) {
+  groups <- unique(wells[, c("run", "target")])
+  inst <- thresholds$threshold[match(paste(groups$run, groups$target),
+                                     paste(thresholds$run, thresholds$target))]
+  auto <- thresholds$auto_threshold[match(paste(groups$run, groups$target),
+                                          paste(thresholds$run,
+                                                thresholds$target))]
+  own <- threshold_value(threshold, groups$target)
+  out <- data.frame(run = groups$run, target = groups$target,
+                    threshold = ifelse(is.na(own), inst, own),
+                    instrument_threshold = inst,
+                    auto_threshold = auto,
+                    source = ifelse(is.na(own), "instrument", "user"),
+                    stringsAsFactors = FALSE)
+  out[!is.na(out$threshold), , drop = FALSE]
 }
 
 # ---- step 1 + 2: wells ------------------------------------------------------

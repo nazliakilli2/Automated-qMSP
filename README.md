@@ -12,13 +12,24 @@ work in Excel.
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/nazliakilli2/Automated-qMSP/blob/claude/gracious-ptolemy-t3d3d8/colab/autoqmsp_colab.ipynb)
 
-The notebook has three steps. Each one is a button with a form, and the code
+The notebook has four steps. Each one is a button with a form, and the code
 stays hidden:
 
 1. **Install**: click ▶ and wait for *Ready*.
-2. **Upload**: click ▶, then *Choose Files* and pick your `.eds` files.
-3. **Settings and report**: adjust the sliders and fields if needed, then click ▶.
-   The report appears in the notebook, and the report (HTML) and Excel file
+2. **Upload**: click ▶, then *Choose Files* and pick your `.eds` files. The
+   amplification curves of every run and gene are drawn, with the
+   instrument's threshold. Hover over a curve to see the sample and its Ct.
+3. **Adjust on the curves**: pick a run and gene and move the sliders.
+   - **Threshold** (green horizontal line): where Ct is read. Moving it
+     recomputes the Ct of every well of that gene.
+   - **Ct cutoff** (red vertical line): wells that cross later count as not
+     methylated.
+
+   The curves change colour, and a table and check messages update (for
+   example "⚠ No-template control amplified"). Your choices are used in step 4.
+4. **Settings and report**: adjust the beta cutoff and the other settings,
+   then click ▶. The report and a chart of the methylation level (beta) per
+   gene appear in the notebook, and the report (HTML) and Excel file
    download.
 
 To see the code behind a step, double-click the step. Tick *show_r_code* to
@@ -69,6 +80,12 @@ instead of being trusted when:
   methylated positive control.
 - In runs without a reference gene, beta = 2^-(Ct(sample) − Ct(positive control)).
 
+**Threshold.** By default the Ct values of the instrument software are used.
+If you set your own fluorescence threshold for a gene, its Ct is recomputed
+from the amplification curve: the cycle where the curve crosses the threshold
+for the last time and stays above it. With the instrument's own threshold, the
+recomputed Ct is within about 0.05 cycles of the instrument's.
+
 **4. Methylated or not.** A gene is **Methylated** when all of these hold:
 
 - Ct ≤ the Ct cutoff
@@ -89,6 +106,7 @@ You can set both cutoffs per gene.
 
 | Setting | Default |
 |---|---|
+| Fluorescence threshold | the instrument's |
 | Ct cutoff | 40 |
 | Beta cutoff | 0 (any detected methylation counts) |
 | Methylated genes for *Potentially cancer* | 1 |
@@ -102,7 +120,8 @@ You can set both cutoffs per gene.
 library(autoqmsp)
 runs <- read_eds_files("folder/with/eds/files")
 res  <- analyze_qmsp(runs, reference = "B ACTIN", ct_cutoff = c(40, TAC1 = 38),
-                     beta_cutoff = 0.05, min_methylated_genes = 2)
+                     threshold = c(TAC1 = 3000), beta_cutoff = 0.05,
+                     min_methylated_genes = 2)
 res$report                           # verdict per sample
 res$results                          # Ct, ΔCt, PMR, beta, call per gene
 write_report(res, "qmsp_report.html")

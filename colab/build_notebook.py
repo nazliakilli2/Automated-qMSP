@@ -171,11 +171,14 @@ def show_table(df, max_rows=None):
 display(HTML("<h3 style='color:#2e8b57'>✔ Ready. Go to step ②.</h3>"))
 '''
 
-UPLOAD = r'''
+UPLOAD_HEAD = r'''
 #@title ② Upload your .eds files and look at the curves { display-mode: "form" }
 #@markdown Click ▶, then **Choose Files** and select one or more `.eds` files.
 #@markdown The amplification curves of every run and gene are drawn below, with the threshold (ΔRn 10,000) and the Ct cutoff (40).
 #@markdown Run this step again to replace the files.
+'''
+
+UPLOAD_LOAD = r'''
 import os, shutil
 from google.colab import files
 from IPython.display import display, HTML
@@ -211,7 +214,9 @@ _summary = _w.groupby("run").agg(
     genes=("target", lambda s: ", ".join(dict.fromkeys(s)))).reset_index()
 display(HTML("<h3 style='color:#2e8b57'>✔ %d run(s) loaded</h3>" % len(_summary)))
 show_table(_summary)
+'''
 
+UPLOAD_CURVES = r'''
 for _run in dict.fromkeys(_w["run"]):
     _genes = list(dict.fromkeys(_w.loc[_w["run"] == _run, "target"]))
     _ncol = min(3, len(_genes))
@@ -235,6 +240,8 @@ display(HTML("<p><span style='color:#27ae60'><b>Green dotted line</b></span>: th
              "when its curve crosses the threshold at or before it. Hover over a curve to see the sample. "
              "Go to step ③ to look at one gene at a time.</p>" % (fmt_thr(THRESHOLD), CT_CUTOFF)))
 '''
+
+UPLOAD = UPLOAD_HEAD + UPLOAD_LOAD + UPLOAD_CURVES
 
 EXPLORE = r'''
 #@title ③ Look at each gene { display-mode: "form" }
@@ -330,7 +337,7 @@ ANALYSE = r'''
 #@title ④ Report { display-mode: "form" }
 #@markdown Click ▶. The report and a Ct chart appear below, and the report and Excel file download.
 #@markdown
-#@markdown **Rule (fixed):** the Ct is read at ΔRn **10,000**; a gene is **methylated** when its Ct is **40 or less**.
+#@markdown **Rule:** the Ct is read at ΔRn **10,000**; a gene is **methylated** when its Ct is **40 or less** (or at or below its own cutoff, if you load a cutoffs file below).
 #@markdown Every sample is called **Potential cancer**, **Not determined** (repeat) or **Low risk**.
 
 #@markdown ### Cancer risk decision
@@ -345,6 +352,10 @@ no_template_controls = ""  #@param {type:"string"}
 positive_controls = ""  #@param {type:"string"}
 #@markdown Warn "low DNA input" when the reference gene Ct is above:
 reference_ct_low_input = 35  #@param {type:"number"}
+
+#@markdown ### Ct cutoff per gene (optional)
+#@markdown Tick to upload a `qmsp_cutoffs.csv` file made with the **cutoff notebook**. Its genes use their own cutoff; other genes use 40.
+use_cutoffs_file = False  #@param {type:"boolean"}
 
 #@markdown ---
 show_r_code = False  #@param {type:"boolean"}
@@ -362,12 +373,33 @@ def _names(text):
 def _exact_regex(names):
     return "^(" + "|".join(re.escape(n) for n in names) + ")$"
 
-def build_r_code(eds_dir, out_dir):
+CUTOFFS_FILE = os.path.join(OUT_DIR, "qmsp_cutoffs.csv")
+
+def load_cutoffs_file():
+    from google.colab import files
+    print("Choose your qmsp_cutoffs.csv file:")
+    up = files.upload()
+    if not up:
+        raise SystemExit("No cutoffs file uploaded.")
+    os.makedirs(OUT_DIR, exist_ok=True)
+    with open(CUTOFFS_FILE, "wb") as f:
+        f.write(list(up.values())[0])
+    for n in up:
+        os.remove(n) if os.path.exists(n) else None
+    d = read_csv(CUTOFFS_FILE, ["ct_cutoff", "cutoff"])
+    col = "ct_cutoff" if "ct_cutoff" in d else "cutoff"
+    gene = "gene" if "gene" in d else "target"
+    if col not in d or gene not in d:
+        raise SystemExit("The cutoffs file needs the columns gene and ct_cutoff.")
+    return dict(zip(d[gene], d[col]))
+
+def build_r_code(eds_dir, out_dir, gene_cutoffs=None):
     ref = reference_gene.strip()
     args = {
         "reference": r_str(_exact_regex([ref])) if ref else "NULL",
         "threshold": "%g" % THRESHOLD,
-        "ct_cutoff": "%g" % CT_CUTOFF,
+        "ct_cutoff": ("read_cutoffs(%s, default = %g)" % (r_str(CUTOFFS_FILE), CT_CUTOFF)
+                      if gene_cutoffs else "%g" % CT_CUTOFF),
         "ref_ct_max": "%g" % CT_CUTOFF,
         "ref_ct_warn": reference_ct_low_input,
         "min_methylated_genes": int(min_methylated_genes),
@@ -392,15 +424,16 @@ utils::write.csv(res$results, file.path({r_str(out_dir)}, "results.csv"), row.na
 print(res)
 """
 
-def run_analysis(eds_dir=EDS_DIR, out_dir=OUT_DIR):
+def run_analysis(eds_dir=EDS_DIR, out_dir=OUT_DIR, gene_cutoffs=None):
     if not os.path.isdir(eds_dir) or not any(f.lower().endswith(".eds") for f in os.listdir(eds_dir)):
         raise SystemExit("No .eds files found. Run step ② first.")
-    code = build_r_code(eds_dir, out_dir)
+    code = build_r_code(eds_dir, out_dir, gene_cutoffs)
     os.makedirs(out_dir, exist_ok=True)
     run_r(code, os.path.join(out_dir, "analysis_script.R"))
     return code
 
-def ct_figure(results):
+def ct_figure(results, gene_cutoffs=None):
+    gene_cutoffs = gene_cutoffs or {}
     r = results[results["role"] == "sample"].copy()
     genes = list(dict.fromkeys(r["target"]))
     top = max(46.0, math.ceil(r["ct"].max() + 1) if r["ct"].notna().any() else 46.0)
@@ -418,27 +451,43 @@ def ct_figure(results):
         fig.add_trace(go.Scatter(x=x, y=d["ct"].fillna(no_ct), mode="markers", name=call, text=text,
                                  hovertemplate="%{text}<extra></extra>",
                                  marker=dict(color=color, size=10, line=dict(color="white", width=1))))
-    fig.add_hrect(y0=CT_CUTOFF, y1=no_ct + 1.5, fillcolor="#888", opacity=0.08, line_width=0)
-    fig.add_hline(y=CT_CUTOFF, line_dash="dash", line_color="#c0392b", line_width=2,
-                  annotation_text="Ct %g: methylated below this line" % CT_CUTOFF,
-                  annotation_position="bottom right", annotation_font_color="#c0392b")
+    if gene_cutoffs:
+        for i, g in enumerate(genes):
+            c = gene_cutoffs.get(g, CT_CUTOFF)
+            if pd.isna(c):
+                continue
+            fig.add_shape(type="line", x0=i - 0.4, x1=i + 0.4, y0=c, y1=c,
+                          line=dict(color="#c0392b", dash="dash", width=2))
+            fig.add_annotation(x=i + 0.41, y=c, text="%g" % c, showarrow=False, xanchor="left",
+                               font=dict(color="#c0392b", size=11))
+    else:
+        fig.add_hrect(y0=CT_CUTOFF, y1=no_ct + 1.5, fillcolor="#888", opacity=0.08, line_width=0)
+        fig.add_hline(y=CT_CUTOFF, line_dash="dash", line_color="#c0392b", line_width=2,
+                      annotation_text="Ct %g: methylated below this line" % CT_CUTOFF,
+                      annotation_position="bottom right", annotation_font_color="#c0392b")
     ticks = list(range(15, int(top) + 1, 5))
     fig.update_yaxes(range=[no_ct + 1.5, min(15, (r["ct"].min() - 2) if r["ct"].notna().any() else 15)],
                      title="Ct at ΔRn %s" % fmt_thr(THRESHOLD),
                      tickvals=ticks + [no_ct], ticktext=[str(t) for t in ticks] + ["no Ct"])
     fig.update_xaxes(tickvals=list(range(len(genes))), ticktext=genes, range=[-0.6, len(genes) - 0.4])
-    fig.update_layout(title="<b>Ct per gene</b> (each dot is a sample)",
+    fig.update_layout(title="<b>Ct per gene</b> (each dot is a sample%s)"
+                      % ("; red dashes: each gene's cutoff" if gene_cutoffs else ""),
                       template="plotly_white", height=460, legend_title_text="Call",
                       margin=dict(l=60, r=20, t=60, b=40))
     return fig
 
-_code = run_analysis()
+_gene_cutoffs = load_cutoffs_file() if use_cutoffs_file else None
+if _gene_cutoffs:
+    display(HTML("<p>Using the cutoffs file: %s. Other genes: %g.</p>" % (
+        ", ".join("%s %s" % (g, "none" if pd.isna(c) else "%g" % c) for g, c in _gene_cutoffs.items()),
+        CT_CUTOFF)))
+_code = run_analysis(gene_cutoffs=_gene_cutoffs)
 if show_r_code:
     print(_code)
 _res = read_csv(os.path.join(OUT_DIR, "results.csv"), ["ct"])
 with open(os.path.join(OUT_DIR, "qmsp_report.html")) as f:
     display(HTML(f.read()))
-ct_figure(_res).show()
+ct_figure(_res, _gene_cutoffs).show()
 if download_files:
     from google.colab import files
     files.download(os.path.join(OUT_DIR, "qmsp_report.html"))
@@ -460,13 +509,20 @@ To change a setting, edit it and click ▶ on the step again. To see the code be
 *For research use only. The results are not a diagnosis.*
 """
 
-nb = {
-    "cells": [md(INTRO), form(INSTALL), form(UPLOAD), form(EXPLORE), form(ANALYSE)],
-    "metadata": {"colab": {"provenance": [], "toc_visible": False},
-                 "kernelspec": {"name": "python3", "display_name": "Python 3"},
-                 "language_info": {"name": "python"}},
-    "nbformat": 4, "nbformat_minor": 0,
-}
-here = os.path.dirname(os.path.abspath(__file__))
-with open(os.path.join(here, "autoqmsp_colab.ipynb"), "w") as f:
-    json.dump(nb, f, indent=1, ensure_ascii=False)
+def notebook(cells):
+    return {
+        "cells": cells,
+        "metadata": {"colab": {"provenance": [], "toc_visible": False},
+                     "kernelspec": {"name": "python3", "display_name": "Python 3"},
+                     "language_info": {"name": "python"}},
+        "nbformat": 4, "nbformat_minor": 0,
+    }
+
+def write(nb, name):
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, name), "w") as f:
+        json.dump(nb, f, indent=1, ensure_ascii=False)
+
+if __name__ == "__main__":
+    write(notebook([md(INTRO), form(INSTALL), form(UPLOAD), form(EXPLORE), form(ANALYSE)]),
+          "autoqmsp_colab.ipynb")

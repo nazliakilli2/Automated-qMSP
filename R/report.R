@@ -108,7 +108,8 @@ report_html <- function(x, title = "qMSP report") {
     Value = c("A gene is methylated when its Ct is at or below the Ct cutoff",
               if (length(s$threshold)) fmt_setting(s$threshold)
               else "instrument software",
-              fmt_setting(s$ct_cutoff), s$reference %||% "none",
+              if (is.null(names(s$ct_cutoff))) fmt_setting(s$ct_cutoff)
+              else cutoff_text(s$ct_cutoff), s$reference %||% "none",
               paste(s$ref_ct_max, "/", s$ref_ct_warn), s$ntc, s$positive,
               s$min_methylated_genes,
               if (length(s$panel)) paste(s$panel, collapse = ", ") else
@@ -144,7 +145,10 @@ report_html <- function(x, title = "qMSP report") {
     "methylation of cancer-associated genes was detected. It must be confirmed ",
     "by a clinician with standard diagnostic tests.</p>",
     '<p class="rule">A gene is <b>methylated</b> when its Ct is <b>',
-    esc(fmt_setting(s$ct_cutoff)), " or less</b>, with the Ct read where the ",
+    if (is.null(names(s$ct_cutoff))) esc(fmt_setting(s$ct_cutoff)) else
+      paste0("at or below its gene&rsquo;s cutoff (",
+             esc(cutoff_text(s$ct_cutoff)), ")"),
+    if (is.null(names(s$ct_cutoff))) " or less", "</b>, with the Ct read where the ",
     "amplification curve crosses <b>&Delta;Rn ",
     if (length(s$threshold)) esc(fmt_thr(s$threshold)) else "(instrument threshold)",
     "</b>.</p>",
@@ -274,6 +278,15 @@ fmt_num <- function(x, digits) {
 }
 
 fmt_fixed <- function(x) ifelse(is.na(x), "&ndash;", sprintf("%.1f", x))
+
+# "TAC1 36.2, HOXA7 38; other genes 40"
+cutoff_text <- function(v) {
+  nm <- names(v)
+  own <- v[nzchar(nm)]
+  paste0(paste(names(own), ifelse(is.finite(own), as.character(round(own, 2)), "none"),
+               collapse = ", "),
+         "; other genes ", v[!nzchar(nm)][1])
+}
 
 fmt_thr <- function(v) {
   if (!is.null(names(v))) return(fmt_setting(v))

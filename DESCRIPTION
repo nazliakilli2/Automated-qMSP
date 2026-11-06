@@ -11,6 +11,8 @@ Description: Reads Applied Biosystems / QuantStudio experiment files (.eds)
     percentage of methylated reference (PMR) and a methylated / unmethylated
     call per sample and gene. Includes amplification-curve, plate-map and
     methylation heatmap plots, Excel export and a point-and-click Shiny app.
+    Ct cutoffs per gene can be chosen from samples of known diagnosis
+    (sensitivity, specificity, ROC).
 License: MIT + file LICENSE
 Encoding: UTF-8
 Depends: R (>= 4.1)

@@ -6,3 +6,4 @@ autoqmsp_*.tar.gz
 # keep raw instrument files out of git by default
 *.eds
 *.edt
+__pycache__/
